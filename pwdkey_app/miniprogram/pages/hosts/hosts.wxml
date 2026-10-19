@@ -1,0 +1,64 @@
+<view class="page">
+
+  <view class="topbar">
+    <view class="topbar-info">
+      <view class="topbar-title">已连接的电脑</view>
+      <view class="muted">名字保存在设备上，换手机也不会丢</view>
+    </view>
+    <view class="icon-btn" bindtap="onRefresh">⟳</view>
+  </view>
+
+  <view class="card list-card">
+    <view wx:if="{{loading}}" class="empty muted">读取中…</view>
+
+    <block wx:elif="{{hosts.length}}">
+      <view class="host {{item.online ? '' : 'host-off'}}"
+            wx:for="{{hosts}}" wx:key="mac" data-mac="{{item.mac}}"
+            bindtap="onHostTap">
+        <view class="host-icon">{{item.hid ? '⌨️' : '📱'}}</view>
+        <view class="host-body">
+          <view class="host-name">
+            {{item.name}}
+            <text wx:if="{{item.userNamed}}" class="tag">自定义</text>
+          </view>
+          <view class="host-mac mono">{{item.mac}}</view>
+        </view>
+        <view class="host-status">
+          <view class="dot {{item.online ? 'dot-on' : 'dot-off'}}"></view>
+          <view class="host-status-text">{{item.online ? '在线' : '离线'}}</view>
+        </view>
+      </view>
+    </block>
+
+    <view wx:else class="empty">
+      <view class="empty-icon">🖥️</view>
+      <view class="muted">还没有记录</view>
+      <view class="muted" style="margin-top:12rpx;">
+        在电脑上配对设备后，这里会自动出现
+      </view>
+    </view>
+
+    <view wx:if="{{err}}" class="err-box">{{err}}</view>
+  </view>
+
+  <view class="hint muted">
+    名字优先用设备自动读到的蓝牙名；读不到时会显示为「电脑 XXXX」。<br/>
+    点击任意一台即可改名或断开连接。<br/>
+    Windows 电脑通常读不到蓝牙名，需要手动改名。
+  </view>
+
+  <!-- 操作浮层 -->
+  <view wx:if="{{acting}}" class="mask" bindtap="onCloseAct">
+    <view class="dialog" catchtap="noop">
+      <view class="dialog-title">{{cur.name}}</view>
+      <view class="muted" style="text-align:center;margin-bottom:16rpx;">{{cur.mac}}</view>
+      <button class="btn btn-primary" bindtap="onRename">✏️ 改名</button>
+      <button class="btn btn-ghost" bindtap="onResetName">恢复默认名（电脑 XXXX）</button>
+      <button class="btn btn-danger" bindtap="onDisconnect" disabled="{{busy}}">
+        {{busy ? '处理中…' : '断开这台'}}
+      </button>
+      <button class="btn btn-ghost" bindtap="onCloseAct">关闭</button>
+    </view>
+  </view>
+
+</view>

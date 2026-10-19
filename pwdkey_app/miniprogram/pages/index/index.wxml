@@ -1,0 +1,82 @@
+<view class="page">
+
+  <!-- 未连接：扫描与设备列表 -->
+  <block wx:if="{{!connected}}">
+    <view class="hero">
+      <view class="hero-logo">🔑</view>
+      <view class="hero-title">PwdKey</view>
+      <view class="hero-sub">蓝牙密码输入器 · 管理工具</view>
+    </view>
+
+    <view class="card">
+      <button class="btn btn-primary" bindtap="onScan" disabled="{{scanning}}">
+        {{scanning ? '正在扫描…' : '扫描附近设备'}}
+      </button>
+
+      <view wx:if="{{devices.length}}" class="device-list">
+        <view class="device-item" wx:for="{{devices}}" wx:key="deviceId"
+              data-device-id="{{item.deviceId}}" data-name="{{item.name}}"
+              bindtap="onConnect">
+          <view class="device-name">{{item.name}}</view>
+          <view class="device-meta">
+            <text class="muted">信号 {{item.rssi}} dBm</text>
+            <text class="link-btn">{{connecting ? '连接中…' : '连接'}}</text>
+          </view>
+        </view>
+      </view>
+
+      <view wx:if="{{err}}" class="err-box">{{err}}</view>
+    </view>
+
+    <view class="hint muted">
+      提示：出厂设备上电后会自动广播 120 秒（超时会重启继续）。
+      连接后即可设置主密码或解锁。
+    </view>
+  </block>
+
+  <!-- 已连接：设备状态与入口 -->
+  <block wx:else>
+    <view class="card dev-card">
+      <view class="dev-head">
+        <view>
+          <view class="title">{{devName}}</view>
+          <view class="muted">固件 {{info.fw}} · 协议 v1.2</view>
+        </view>
+        <view class="badge {{info.passwordSet ? 'badge-ok' : 'badge-warn'}}">
+          {{info.passwordSet ? '已启用' : '未启用'}}
+        </view>
+      </view>
+
+      <view class="row">
+        <text class="label">密码条目</text>
+        <text class="value">{{info.entryCount}} 条</text>
+      </view>
+      <view class="row">
+        <text class="label">主密码</text>
+        <text class="value">{{info.passwordSet ? '已设置' : '未设置（出厂态）'}}</text>
+      </view>
+      <view class="row">
+        <text class="label">锁定状态</text>
+        <text class="value">{{info.lockSeconds > 0 ? '锁定中（剩 ' + info.lockSeconds + ' 秒）' : '正常'}}</text>
+      </view>
+      <view class="row">
+        <text class="label">会话</text>
+        <text class="value">{{unlocked ? '已解锁' : '未解锁'}}</text>
+      </view>
+    </view>
+
+    <view class="card">
+      <button wx:if="{{!info.passwordSet}}" class="btn btn-primary" bindtap="goSetup">
+        首次设置主密码
+      </button>
+      <button wx:else class="btn btn-primary" bindtap="goVault">
+        {{unlocked ? '进入密码库' : '解锁设备'}}
+      </button>
+      <button class="btn btn-ghost" bindtap="onRefresh">刷新状态</button>
+      <button class="btn btn-ghost" bindtap="onDisconnect">断开连接</button>
+    </view>
+
+    <view wx:if="{{err}}" class="card err-box">{{err}}</view>
+  </block>
+
+</view>

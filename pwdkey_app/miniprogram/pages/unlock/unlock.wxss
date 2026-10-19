@@ -1,0 +1,13 @@
+.page { padding-bottom: 60rpx; }
+.desc { margin-top: 16rpx; line-height: 1.7; }
+.center-card { text-align: center; padding: 60rpx 40rpx; }
+.spin { font-size: 96rpx; margin-bottom: 24rpx; }
+.err-box {
+  color: #dc2626;
+  background: #fef2f2;
+  border-radius: 12rpx;
+  padding: 20rpx 24rpx;
+  margin-top: 24rpx;
+  font-size: 26rpx;
+}
+.hint { padding: 8rpx 48rpx; text-align: center; line-height: 1.8; }

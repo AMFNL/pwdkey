@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">PwdKey</string>
+    <string name="title_activity_main">PwdKey</string>
+    <string name="package_name">com.pwdkey.app</string>
+    <string name="custom_url_scheme">com.pwdkey.app</string>
+</resources>

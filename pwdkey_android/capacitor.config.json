@@ -1,0 +1,20 @@
+{
+  "appId": "com.pwdkey.app",
+  "appName": "PwdKey",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": false,
+    "captureInput": true,
+    "webContentsDebuggingEnabled": false
+  },
+  "plugins": {
+    "BluetoothLe": {
+      "displayStrings": {
+        "scanning": "正在扫描…",
+        "cancel": "取消",
+        "availableDevices": "可用设备",
+        "noDeviceFound": "未找到设备"
+      }
+    }
+  }
+}

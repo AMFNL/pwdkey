@@ -1,0 +1,75 @@
+# ============================================================
+# ESP32-S3 BLE Password Key (PwdKey) - sdkconfig.defaults
+# Hardware: ESP32-S3-N16R8 (16MB Flash / 8MB Octal PSRAM)
+# Base: ESP-IDF v5.5.5
+# ============================================================
+
+# --- Target and Flash ---
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+
+# --- PSRAM (N16R8 = Octal PSRAM @80MHz) ---
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+
+# --- Bluetooth: master switch + host selection ---
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+
+# --- Roles and connections ---
+CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y
+# CENTRAL is required even though we never initiate connections: it is what
+# compiles in the NimBLE GATT *client*, which host_name_probe.c uses to read
+# the peer's GAP Device Name (0x2A00) over an existing connection.
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
+CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=3
+CONFIG_BT_CTRL_BLE_MAX_ACT=6
+CONFIG_BT_NIMBLE_MAX_BONDS=4
+CONFIG_BT_NIMBLE_MAX_CCCDS=16
+
+# --- Security: stage 0 (development); stage 1 switches to SM_LVL=3 ---
+CONFIG_BT_NIMBLE_SM_SC=y
+CONFIG_BT_NIMBLE_SM_LVL=2
+CONFIG_BT_NIMBLE_NVS_PERSIST=y
+CONFIG_BT_NIMBLE_HS_PVCY=y
+# NOTE: sm_mitm / sm_io_cap / sm_our_key_dist / sm_their_key_dist have no Kconfig;
+#       they must be set in code via ble_hs_cfg (see main.c step F).
+
+# --- HID / DIS / BAS ---
+CONFIG_BT_NIMBLE_HID_SERVICE=y
+CONFIG_BT_NIMBLE_SVC_HID_MAX_RPTS=2
+CONFIG_BT_NIMBLE_SVC_HID_MAX_INSTANCES=1
+CONFIG_BT_NIMBLE_SVC_DIS_PNP_ID=y
+CONFIG_BT_NIMBLE_BAS_SERVICE=y
+
+# --- Memory ---
+CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y
+CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=256
+CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE=4096
+
+# --- NVS: zero-eFuse baseline (keep OFF!) ---
+CONFIG_NVS_ENCRYPTION=n
+
+# --- mbedtls (HKDF is OFF by default!) ---
+CONFIG_MBEDTLS_HKDF_C=y
+# MBEDTLS_PKCS5_C and MBEDTLS_GCM_C are ON by default (verified).
+
+# --- FreeRTOS tick (optional) ---
+# CONFIG_FREERTOS_HZ=1000
+
+# --- Partition table ---
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# --- Console: USB-Serial-JTAG as primary (single-cable flash + log) ---
+# Matches the dev-board wiring (native USB port). Change back to
+# CONFIG_ESP_CONSOLE_UART_DEFAULT=y if you use the board's UART-USB port.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+
+# --- Main task stack ---
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=3584

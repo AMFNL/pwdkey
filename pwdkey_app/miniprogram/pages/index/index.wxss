@@ -1,0 +1,47 @@
+.page { padding-bottom: 40rpx; }
+
+.hero { text-align: center; padding: 80rpx 0 40rpx; }
+.hero-logo { font-size: 96rpx; }
+.hero-title { font-size: 44rpx; font-weight: 700; margin-top: 16rpx; }
+.hero-sub { color: #6b7280; margin-top: 8rpx; }
+
+.device-list { margin-top: 24rpx; }
+.device-item {
+  padding: 24rpx;
+  border: 1rpx solid #e2e8f0;
+  border-radius: 16rpx;
+  margin-top: 16rpx;
+}
+.device-name { font-size: 30rpx; font-weight: 600; }
+.device-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 8rpx;
+}
+.link-btn { color: #2563eb; font-weight: 600; }
+
+.dev-card { padding: 32rpx; }
+.dev-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding-bottom: 16rpx;
+  border-bottom: 1rpx solid #f1f5f9;
+  margin-bottom: 8rpx;
+}
+
+.err-box {
+  color: #dc2626;
+  background: #fef2f2;
+  border-radius: 12rpx;
+  padding: 20rpx 24rpx;
+  margin-top: 24rpx;
+  font-size: 26rpx;
+}
+
+.hint {
+  padding: 8rpx 48rpx;
+  text-align: center;
+  line-height: 1.7;
+}

@@ -1,0 +1,78 @@
+<view class="page">
+
+  <!-- 阶段 1：输入 -->
+  <block wx:if="{{phase === 'input'}}">
+    <view class="card">
+      <view class="title">设置主密码</view>
+      <view class="desc muted">
+        主密码是设备唯一的安全凭据。设备只保存验证值、无法找回；
+        忘记后只能用恢复码重置（会清空全部密码）。
+      </view>
+
+      <input class="input" password="{{!showPwd}}" placeholder="主密码（纯 ASCII 字符）"
+             value="{{pwd1}}" bindinput="onInput1" maxlength="64" />
+      <input class="input" password="{{!showPwd}}" placeholder="再次输入确认"
+             value="{{pwd2}}" bindinput="onInput2" maxlength="64" />
+
+      <view class="row">
+        <text class="label">显示密码</text>
+        <switch checked="{{showPwd}}" bindchange="toggleShow" color="#2563eb" />
+      </view>
+
+      <view wx:if="{{err}}" class="err-box">{{err}}</view>
+
+      <button class="btn btn-primary" bindtap="onStart"
+              disabled="{{!pwd1 || !pwd2}}">开始设置</button>
+    </view>
+
+    <view class="hint muted">
+      设置过程约需 3–10 秒（安全密钥计算），随后设备会要求你按一下 BOOT 键确认。
+    </view>
+  </block>
+
+  <!-- 阶段 2：计算密钥 -->
+  <block wx:elif="{{phase === 'computing'}}">
+    <view class="card center-card">
+      <view class="spin">🔐</view>
+      <view class="title">正在生成安全密钥…</view>
+      <view class="muted" style="margin-top:8rpx;">PBKDF2 密钥派生 {{progress}}%</view>
+      <view class="progress-wrap">
+        <view class="progress-bar" style="width:{{progress}}%"></view>
+      </view>
+      <view class="hint muted" style="margin-top:16rpx;">
+        首次运行需要完成 20 万次迭代计算，请保持页面开启
+      </view>
+    </view>
+  </block>
+
+  <!-- 阶段 3：等待物理确认 -->
+  <block wx:elif="{{phase === 'waiting'}}">
+    <view class="card center-card">
+      <view class="waiting-icon">👆</view>
+      <view class="title">请在设备上短按 BOOT 键</view>
+      <view class="countdown">{{countdown}}s</view>
+      <view class="muted" style="text-align:center;">
+        找到设备上的 BOOT 按钮，<text style="font-weight:600;">短按一下</text>（少于 2 秒）<br/>
+        长按会取消本次操作
+      </view>
+    </view>
+  </block>
+
+  <!-- 阶段 4：恢复码 -->
+  <block wx:elif="{{phase === 'done'}}">
+    <view class="card">
+      <view class="ok-icon">✅</view>
+      <view class="title" style="text-align:center;">设置成功</view>
+      <view class="warn-box">
+        ⚠️ 恢复码只显示这一次。忘记主密码时只有它能重置设备（会清空所有密码）。
+        请立刻抄写到纸上，不要只存在手机里。
+      </view>
+      <view class="recovery-code">{{recoveryCode}}</view>
+      <button class="btn btn-ghost" bindtap="copyCode">
+        {{copied ? '已复制 ✓' : '复制恢复码'}}
+      </button>
+      <button class="btn btn-primary" bindtap="onDone">我已抄写，完成</button>
+    </view>
+  </block>
+
+</view>

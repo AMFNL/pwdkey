@@ -1,0 +1,569 @@
+/* ============================================================
+   PwdKey Android App 样式
+   —— 由小程序 app.wxss + 各页面 wxss 逐条换算而来
+   换算基准：1rem = 20rpx（html font-size = 100vw / 37.5）
+   注意：刻意不使用 inset / gap 等较新的简写，兼容性优先
+   ============================================================ */
+
+:root {
+  --c-text: #1f2937;
+  --c-muted: #6b7280;
+  --c-primary: #2563eb;
+  --c-primary-weak: #93b4f3;
+  --c-danger: #dc2626;
+  --c-line: #f1f5f9;
+  --c-bg: #f5f7fa;
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html {
+  font-size: calc(100vw / 37.5);   /* 1rem = 20rpx */
+}
+@media (min-width: 640px) {
+  html { font-size: 16px; }        /* 平板/桌面预览：别把字放得太大 */
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--c-bg);
+  color: var(--c-text);
+  font-size: 1.4rem;               /* 28rpx */
+  line-height: 1.5;
+  font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue",
+               "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  overflow-x: hidden;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* ---------------- 顶栏（对应小程序原生 navigationBar） ---------------- */
+
+.appbar {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: #ffffff;
+  padding-top: env(safe-area-inset-top);
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.06);
+}
+.appbar-inner {
+  height: 44px;
+  display: flex;
+  align-items: center;
+  padding: 0 6px;
+}
+.appbar-back {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  color: #334155;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.appbar-back:active { background: #f1f5f9; }
+.appbar-title {
+  flex: 1;
+  text-align: center;
+  font-size: 16px;
+  font-weight: 600;
+  margin-right: 40px;              /* 与左侧返回键等宽，保证标题居中 */
+}
+.appbar-title.no-back { margin-right: 0; margin-left: 40px; }
+
+#page-root { padding-bottom: calc(3rem + env(safe-area-inset-bottom)); }
+
+/* ---------------- 卡片 ---------------- */
+
+.card {
+  background: #ffffff;
+  border-radius: 1rem;             /* 20rpx */
+  padding: 1.6rem;                 /* 32rpx */
+  margin: 1.2rem;                  /* 24rpx */
+  box-shadow: 0 0.1rem 0.6rem rgba(15, 23, 42, 0.04);
+}
+
+/* ---------------- 按钮 ---------------- */
+
+.btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 4.6rem;                  /* 92rpx */
+  border: none;
+  border-radius: 0.8rem;           /* 16rpx */
+  font-size: 1.6rem;               /* 32rpx */
+  font-weight: 600;
+  font-family: inherit;
+  color: inherit;
+  margin-top: 1.2rem;              /* 24rpx */
+  transition: opacity 0.15s;
+}
+.btn:active { opacity: 0.82; }
+.btn[disabled] { opacity: 0.55; }
+
+.btn-primary { background: var(--c-primary); color: #ffffff; }
+.btn-primary[disabled] { background: var(--c-primary-weak); color: #eef4ff; }
+.btn-ghost { background: #eef2f7; color: #334155; }
+.btn-danger { background: #fef2f2; color: var(--c-danger); }
+
+/* ---------------- 文本 ---------------- */
+
+.muted { color: var(--c-muted); font-size: 1.2rem; }   /* 24rpx */
+.title { font-size: 1.8rem; font-weight: 700; }        /* 36rpx */
+.desc { margin-top: 0.4rem; line-height: 1.6; }
+.mono {
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  letter-spacing: 0.1rem;
+}
+.hint {
+  padding: 0.4rem 2.4rem;
+  text-align: center;
+  line-height: 1.7;
+}
+
+/* ---------------- 行 ---------------- */
+
+.row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 0;                 /* 20rpx */
+  border-bottom: 1px solid var(--c-line);
+}
+.row:last-child { border-bottom: none; }
+.row .label { color: #64748b; }
+.row .value { font-weight: 500; }
+
+/* ---------------- 输入 ---------------- */
+
+.input {
+  display: block;
+  width: 100%;
+  height: 4.4rem;                  /* 88rpx */
+  background: #f8fafc;
+  border: 1px solid transparent;
+  border-radius: 0.7rem;           /* 14rpx */
+  padding: 0 1.2rem;               /* 0 24rpx */
+  margin-top: 0.8rem;              /* 16rpx */
+  font-size: 1.5rem;               /* 30rpx */
+  font-family: inherit;
+  color: var(--c-text);
+}
+.input:focus { outline: none; border-color: var(--c-primary); background: #fff; }
+.input.plain { letter-spacing: 0; }
+
+/* ---------------- 开关（替代小程序 <switch>） ---------------- */
+
+.switch {
+  position: relative;
+  width: 3.6rem;
+  height: 2.1rem;
+  border-radius: 99rem;
+  background: #e2e8f0;
+  transition: background 0.2s;
+  flex-shrink: 0;
+}
+.switch::after {
+  content: "";
+  position: absolute;
+  top: 0.15rem;
+  left: 0.15rem;
+  width: 1.8rem;
+  height: 1.8rem;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0.1rem 0.3rem rgba(15, 23, 42, 0.25);
+  transition: transform 0.2s;
+}
+.switch.on { background: var(--c-primary); }
+.switch.on::after { transform: translateX(1.5rem); }
+
+/* ---------------- 徽标 ---------------- */
+
+.badge {
+  display: inline-block;
+  padding: 0.2rem 0.8rem;          /* 4rpx 16rpx */
+  border-radius: 99rem;
+  font-size: 1.1rem;               /* 22rpx */
+}
+.badge-ok { background: #ecfdf5; color: #059669; }
+.badge-warn { background: #fffbeb; color: #d97706; }
+.badge-off { background: #f1f5f9; color: #64748b; }
+
+/* ---------------- 遮罩 / 弹层 ---------------- */
+
+.mask {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  width: 100%; height: 100%;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 1.6rem;
+}
+
+.dialog {
+  width: 30rem;                    /* 600rpx */
+  max-width: 100%;
+  background: #fff;
+  border-radius: 1.2rem;           /* 24rpx */
+  padding: 2rem 1.8rem;            /* 40rpx 36rpx */
+  max-height: 80vh;
+  overflow-y: auto;
+}
+.dialog-title {
+  font-size: 1.7rem;               /* 34rpx */
+  font-weight: 700;
+  text-align: center;
+  margin-bottom: 0.4rem;
+}
+.dialog-content {
+  color: var(--c-muted);
+  font-size: 1.3rem;
+  line-height: 1.6;
+  text-align: center;
+  margin: 0.8rem 0 0.4rem;
+  white-space: pre-wrap;
+}
+.dialog-actions { display: flex; }
+.dialog-actions .btn { flex: 1; }
+.dialog-actions .btn + .btn { margin-left: 0.8rem; }
+
+/* ---------------- toast ---------------- */
+
+.toast {
+  position: fixed;
+  left: 50%;
+  top: 42%;
+  transform: translate(-50%, -50%) scale(0.94);
+  background: rgba(15, 23, 42, 0.88);
+  color: #fff;
+  font-size: 1.4rem;
+  padding: 1rem 1.6rem;
+  border-radius: 0.8rem;
+  max-width: 80vw;
+  text-align: center;
+  opacity: 0;
+  transition: opacity 0.18s, transform 0.18s;
+  z-index: 300;
+  pointer-events: none;
+  white-space: pre-wrap;
+}
+.toast.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+
+/* ---------------- loading ---------------- */
+
+.loading-mask { background: rgba(15, 23, 42, 0.28); }
+.loading-box {
+  background: rgba(17, 24, 39, 0.86);
+  border-radius: 1rem;
+  padding: 1.6rem 2rem;
+  min-width: 10rem;
+  text-align: center;
+  color: #fff;
+}
+.loading-text { font-size: 1.3rem; margin-top: 1rem; }
+.spinner {
+  width: 2.4rem;
+  height: 2.4rem;
+  margin: 0 auto;
+  border: 0.24rem solid rgba(255, 255, 255, 0.25);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---------------- action sheet ---------------- */
+
+.sheet-mask { align-items: flex-end; padding: 0; }
+.sheet {
+  width: 100%;
+  background: #f8fafc;
+  border-radius: 1.2rem 1.2rem 0 0;
+  padding-bottom: env(safe-area-inset-bottom);
+  animation: sheet-up 0.2s ease-out;
+}
+@keyframes sheet-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
+.sheet-title {
+  text-align: center;
+  padding: 1.2rem;
+  font-size: 1.2rem;
+  color: var(--c-muted);
+  border-bottom: 1px solid #e2e8f0;
+}
+.sheet-item {
+  text-align: center;
+  padding: 1.6rem 1.2rem;
+  font-size: 1.6rem;
+  background: #fff;
+  border-bottom: 1px solid #f1f5f9;
+}
+.sheet-item:active { background: #f1f5f9; }
+.sheet-cancel {
+  margin-top: 0.8rem;
+  border-bottom: none;
+  color: #64748b;
+  font-weight: 600;
+}
+
+/* ---------------- 进度条 ---------------- */
+
+.progress-wrap {
+  height: 0.8rem;                  /* 16rpx */
+  border-radius: 99rem;
+  background: #e2e8f0;
+  overflow: hidden;
+  margin-top: 1rem;
+}
+.progress-bar {
+  height: 100%;
+  background: var(--c-primary);
+  border-radius: 99rem;
+  transition: width 0.2s;
+}
+
+/* ---------------- 等待按键 / 倒计时 ---------------- */
+
+.waiting-icon {
+  width: 6rem;                     /* 120rpx */
+  height: 6rem;
+  border-radius: 50%;
+  background: #eff6ff;
+  color: var(--c-primary);
+  font-size: 2.8rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 1.2rem;
+}
+.countdown {
+  font-size: 3.6rem;               /* 72rpx */
+  font-weight: 700;
+  color: var(--c-primary);
+  text-align: center;
+  margin: 0.8rem 0;
+}
+.center-card { text-align: center; }
+.spin {
+  font-size: 3.6rem;
+  text-align: center;
+  margin-bottom: 0.8rem;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+.ok-icon { font-size: 3.6rem; text-align: center; margin-bottom: 0.4rem; }
+
+/* ---------------- 提示框 ---------------- */
+
+.err-box {
+  color: var(--c-danger);
+  background: #fef2f2;
+  border-radius: 0.6rem;
+  padding: 1rem 1.2rem;
+  margin: 0.8rem 0;
+  font-size: 1.3rem;
+  white-space: pre-wrap;
+  line-height: 1.6;
+}
+.warn-box {
+  background: #fffbeb;
+  color: #b45309;
+  border-radius: 0.6rem;
+  padding: 1rem 1.2rem;
+  margin: 0.8rem 0 1.2rem;
+  font-size: 1.3rem;
+  line-height: 1.6;
+}
+
+/* ---------------- 恢复码 ---------------- */
+
+.recovery-code {
+  font-size: 2.2rem;               /* 44rpx */
+  font-weight: 700;
+  letter-spacing: 0.3rem;
+  color: #1e293b;
+  background: #f8fafc;
+  border-radius: 0.8rem;
+  padding: 1.6rem 1rem;
+  text-align: center;
+  word-break: break-all;
+  line-height: 1.6;
+}
+
+/* ============================================================
+   首页
+   ============================================================ */
+
+.hero { text-align: center; padding: 3rem 1.6rem 1rem; }
+.hero-logo {
+  width: 7.2rem;
+  height: 7.2rem;
+  margin: 0 auto 1.2rem;
+  border-radius: 2rem;
+  background: #eff6ff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 3.6rem;
+}
+.hero-title { font-size: 2.6rem; font-weight: 700; letter-spacing: 0.2rem; }
+.hero-sub { color: var(--c-muted); font-size: 1.2rem; margin-top: 0.4rem; }
+
+.device-list { margin-top: 0.8rem; }
+.device-item {
+  padding: 1.2rem 0;
+  border-bottom: 1px solid var(--c-line);
+}
+.device-item:last-child { border-bottom: none; }
+.device-name { font-size: 1.6rem; font-weight: 600; }
+.device-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 0.4rem;
+}
+.link-btn { color: var(--c-primary); font-size: 1.4rem; font-weight: 600; }
+
+.dev-card { padding-bottom: 0.8rem; }
+.dev-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 0.8rem;
+}
+
+/* ============================================================
+   密码库
+   ============================================================ */
+
+.page-topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.6rem 1.6rem 0.4rem;
+}
+.page-topbar-title { font-size: 2rem; font-weight: 700; }
+.topbar-actions { display: flex; }
+.topbar-actions .icon-btn + .icon-btn { margin-left: 0.8rem; }
+
+.icon-btn {
+  width: 3.6rem;                   /* 72rpx */
+  height: 3.6rem;
+  border-radius: 50%;
+  background: #eef2f7;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.7rem;
+}
+.icon-btn:active { background: #e2e8f0; }
+
+.list-card { padding: 0.4rem 1.6rem; }
+
+.entry {
+  display: flex;
+  align-items: center;
+  padding: 1.4rem 0;               /* 28rpx */
+  border-bottom: 1px solid var(--c-line);
+}
+.entry:last-child { border-bottom: none; }
+.entry-icon {
+  width: 3.6rem;
+  height: 3.6rem;
+  border-radius: 0.9rem;
+  background: #eff6ff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.7rem;
+  margin-right: 1.2rem;
+  flex-shrink: 0;
+}
+.entry-body { flex: 1; min-width: 0; }
+.entry-name {
+  font-size: 1.5rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.entry-id { font-size: 1.1rem; color: #94a3b8; margin-top: 0.2rem; }
+.entry-arrow { color: #cbd5e1; font-size: 2rem; margin-left: 0.6rem; }
+
+.empty { text-align: center; padding: 3rem 0; }
+.empty-icon { font-size: 3.6rem; margin-bottom: 0.6rem; }
+
+/* ============================================================
+   已连接的电脑
+   ============================================================ */
+
+.host {
+  display: flex;
+  align-items: center;
+  padding: 1.4rem 0;
+  border-bottom: 1px solid var(--c-line);
+}
+.host:last-child { border-bottom: none; }
+.host-off .host-icon { background: #f1f5f9; }
+.host-off .host-name { color: #64748b; }
+
+.host-icon {
+  width: 3.6rem;
+  height: 3.6rem;
+  border-radius: 0.9rem;
+  background: #eff6ff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.7rem;
+  margin-right: 1.2rem;
+  flex-shrink: 0;
+}
+.host-body { flex: 1; min-width: 0; }
+.host-name {
+  font-size: 1.5rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tag {
+  display: inline-block;
+  font-size: 1rem;
+  font-weight: 400;
+  color: var(--c-primary);
+  background: #eff6ff;
+  border-radius: 0.3rem;
+  padding: 0.1rem 0.5rem;
+  margin-left: 0.6rem;
+  vertical-align: middle;
+}
+.host-mac { font-size: 1.1rem; color: #94a3b8; margin-top: 0.2rem; }
+
+.host-status { flex-shrink: 0; text-align: center; width: 4.8rem; }
+.dot {
+  width: 1rem;
+  height: 1rem;
+  border-radius: 50%;
+  margin: 0 auto 0.3rem;
+}
+.dot-on { background: #10b981; }
+.dot-off { background: #cbd5e1; }
+.host-status-text { font-size: 1.1rem; color: var(--c-muted); }
+
+/* 小程序里 rpx 的 1px 细线，在高分屏上要真的细 */
+@media (-webkit-min-device-pixel-ratio: 2) {
+  .row, .entry, .host, .device-item { border-bottom-width: 0.5px; }
+}

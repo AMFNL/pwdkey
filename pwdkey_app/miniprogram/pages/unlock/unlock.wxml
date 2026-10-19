@@ -1,0 +1,42 @@
+<view class="page">
+
+  <block wx:if="{{phase === 'input' || phase === 'error'}}">
+    <view class="card">
+      <view class="title">解锁设备</view>
+      <view class="desc muted">
+        输入主密码完成认证。认证后 30 秒内可执行一次密码输出操作。
+      </view>
+
+      <input class="input" password="{{!showPwd}}" placeholder="主密码"
+             value="{{pwd}}" bindinput="onInput" maxlength="64"
+             confirm-type="go" bindconfirm="onUnlock" />
+
+      <view class="row">
+        <text class="label">显示密码</text>
+        <switch checked="{{showPwd}}" bindchange="toggleShow" color="#2563eb" />
+      </view>
+
+      <view wx:if="{{err}}" class="err-box">{{err}}</view>
+
+      <button class="btn btn-primary" bindtap="onUnlock"
+              disabled="{{!pwd || phase === 'computing'}}">解锁</button>
+    </view>
+
+    <view class="hint muted">
+      连续输错 3 次锁定 30 秒 / 6 次锁定 5 分钟 / 10 次永久锁定。<br/>
+      忘记主密码：请用恢复码重置（会清空全部密码）。
+    </view>
+  </block>
+
+  <block wx:elif="{{phase === 'computing'}}">
+    <view class="card center-card">
+      <view class="spin">🔐</view>
+      <view class="title">正在验证密钥…</view>
+      <view class="muted" style="margin-top:8rpx;">{{progress}}%</view>
+      <view class="progress-wrap">
+        <view class="progress-bar" style="width:{{progress}}%"></view>
+      </view>
+    </view>
+  </block>
+
+</view>

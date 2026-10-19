@@ -1,0 +1,169 @@
+/* app.wxss - 全局样式（浅色现代风） */
+page {
+  background: #f5f7fa;
+  font-size: 28rpx;
+  color: #1f2937;
+  font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC",
+               "Microsoft YaHei", sans-serif;
+  line-height: 1.5;
+}
+
+/* 卡片 */
+.card {
+  background: #ffffff;
+  border-radius: 20rpx;
+  padding: 32rpx;
+  margin: 24rpx;
+  box-shadow: 0 2rpx 12rpx rgba(15, 23, 42, 0.04);
+}
+
+/* 按钮 */
+.btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 92rpx;
+  border-radius: 16rpx;
+  font-size: 32rpx;
+  font-weight: 600;
+  margin-top: 24rpx;
+}
+.btn::after { border: none; }
+
+.btn-primary {
+  background: #2563eb;
+  color: #ffffff;
+}
+.btn-primary.disabled, .btn-primary[disabled] {
+  background: #93b4f3;
+  color: #eef4ff;
+}
+.btn-ghost {
+  background: #eef2f7;
+  color: #334155;
+}
+.btn-danger {
+  background: #fef2f2;
+  color: #dc2626;
+}
+
+/* 文本辅助 */
+.muted { color: #6b7280; font-size: 24rpx; }
+.title { font-size: 36rpx; font-weight: 700; }
+.mono {
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  letter-spacing: 2rpx;
+}
+
+/* 行 */
+.row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20rpx 0;
+  border-bottom: 1rpx solid #f1f5f9;
+}
+.row:last-child { border-bottom: none; }
+.row .label { color: #64748b; }
+.row .value { font-weight: 500; }
+
+/* 输入 */
+.input {
+  height: 88rpx;
+  background: #f8fafc;
+  border-radius: 14rpx;
+  padding: 0 24rpx;
+  margin-top: 16rpx;
+  font-size: 30rpx;
+}
+.input.plain { letter-spacing: 0; }
+
+/* 徽标 */
+.badge {
+  display: inline-block;
+  padding: 4rpx 16rpx;
+  border-radius: 999rpx;
+  font-size: 22rpx;
+}
+.badge-ok { background: #ecfdf5; color: #059669; }
+.badge-warn { background: #fffbeb; color: #d97706; }
+.badge-off { background: #f1f5f9; color: #64748b; }
+
+/* 遮罩弹层（注意：使用 top/left/right/bottom 兼容旧版 WebView，
+   不要用 inset 简写——部分手机微信内核不支持会导致弹窗塌陷） */
+.mask {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+.dialog {
+  width: 600rpx;
+  background: #fff;
+  border-radius: 24rpx;
+  padding: 40rpx 36rpx;
+}
+.dialog-title {
+  font-size: 34rpx;
+  font-weight: 700;
+  text-align: center;
+  margin-bottom: 8rpx;
+}
+
+/* 等待按键浮层 */
+.waiting-icon {
+  width: 120rpx;
+  height: 120rpx;
+  border-radius: 50%;
+  background: #eff6ff;
+  color: #2563eb;
+  font-size: 56rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 24rpx;
+}
+.countdown {
+  font-size: 72rpx;
+  font-weight: 700;
+  color: #2563eb;
+  text-align: center;
+  margin: 16rpx 0;
+}
+
+/* 进度条 */
+.progress-wrap {
+  height: 16rpx;
+  border-radius: 999rpx;
+  background: #e2e8f0;
+  overflow: hidden;
+  margin-top: 20rpx;
+}
+.progress-bar {
+  height: 100%;
+  background: #2563eb;
+  border-radius: 999rpx;
+  transition: width 0.2s;
+}
+
+/* 恢复码展示 */
+.recovery-code {
+  font-size: 44rpx;
+  font-weight: 700;
+  letter-spacing: 6rpx;
+  color: #1e293b;
+  background: #f8fafc;
+  border-radius: 16rpx;
+  padding: 32rpx 20rpx;
+  text-align: center;
+  word-break: break-all;
+  line-height: 1.6;
+}

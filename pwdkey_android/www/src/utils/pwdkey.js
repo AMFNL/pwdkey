@@ -1,0 +1,499 @@
+/**
+ * pwdkey.js - PwdKey 设备操作层（协议 v1.2）
+ *
+ * 对外接口（页面调用）:
+ *   connect(deviceId)        连接并读取设备信息
+ *   refreshInfo()            刷新设备信息
+ *   setPassword(pwd, cb)     首次设置主密码 → 返回恢复码
+ *   unlock(pwd, cb)          认证（主密码）
+ *   lock()                   锁定（销毁会话）
+ *   listEntries()            条目 ID 列表
+ *   addEntry(pwd, name)      添加条目 → 返回条目 ID
+ *   deleteEntry(id)          删除条目
+ *   getEntryName(id)         读取条目名称
+ *   typeEntry(id, cb)        输出条目到电脑（等待按键）
+ *                            cb.onPickTarget 支持多台电脑在线时选目标
+ *   enterPairing(cb)         进入配对模式（等待按键）
+ *
+ * 会话安全: KEK 只保存在本模块内存中，lock()/断开时立即清除。
+ */
+const ble = require('./ble.js');
+const proto = require('../libs/proto.js');
+const crypto = require('./crypto.js');
+
+const { OP, TAG, tlv, buildFrames } = proto;
+
+class PwdKeyError extends Error {
+  constructor(code, message) {
+    super(message || proto.errText(code));
+    this.code = code;
+  }
+}
+
+class PwdKey {
+  constructor() {
+    this.connected = false;
+    this.deviceId = null;
+    this.info = null;          // { fw, entryCount, state, lockSeconds, salt, iter, sessionId }
+    this.kek = null;           // Uint8Array | null（仅内存）
+    this.verifier = null;
+    this._rid = 0;
+    this._waiters = [];        // { opcode, wantResult, resolve, reject }
+    this._orphan = [];         // 早到的帧缓存 { ts, opcode, tlvs, hasResult }
+    this._asm = new proto.RecvAssembler();
+  }
+
+  /* ---------------- 底层收发 ---------------- */
+
+  async connect(deviceId) {
+    try {
+      await ble.connect(deviceId);
+      this.deviceId = deviceId;
+      this._asm = new proto.RecvAssembler();
+      ble.onNotify((data) => this._onData(data));
+      await this.refreshInfo();
+      // 全部成功后才置为已连接，避免"半连接"脏状态
+      this.connected = true;
+      return this.info;
+    } catch (e) {
+      this.connected = false;
+      await ble.disconnect().catch(() => {});
+      throw e;
+    }
+  }
+
+  async disconnect() {
+    this.lock().catch(() => {});
+    this.kek = null;
+    this.verifier = null;
+    this.connected = false;
+    this.deviceId = null;
+    await ble.disconnect();
+  }
+
+  _onData(data) {
+    const frames = this._asm.push(data);
+    for (const f of frames) {
+      const p = proto.parseFrame(f);
+      if (p) { this._dispatch(p); }
+    }
+  }
+
+  _dispatch(f) {
+    const hasRes = proto.hasResult(f.tlvs);
+    // 先给等待者
+    for (let i = 0; i < this._waiters.length; i++) {
+      const w = this._waiters[i];
+      if (w.opcode !== f.opcode) { continue; }
+      if (w.wantResult !== undefined && w.wantResult !== hasRes) { continue; }
+      this._waiters.splice(i, 1);
+      w.resolve(f);
+      return;
+    }
+    // 无等待者：暂存（10 秒内有效）
+    this._orphan.push({ ts: Date.now(), frame: f, hasResult: hasRes });
+    if (this._orphan.length > 8) { this._orphan.shift(); }
+  }
+
+  _nextRid() {
+    this._rid = (this._rid % 0xFFFF) + 1;
+    return this._rid;
+  }
+
+  /** 发送请求（自动分片） */
+  async _send(opcode, tlvs) {
+    const all = proto.concatBytes(tlvs, tlv(TAG.REQUEST_ID, proto.u16le(this._nextRid())));
+    const frames = buildFrames(opcode, all, 14);
+    await ble.writeChunks(frames);
+  }
+
+  /**
+   * 等待一帧响应。
+   * @param {number} opcode
+   * @param {{wantResult?:boolean, timeout?:number}} opts
+   */
+  _waitFrame(opcode, opts) {
+    const { wantResult, timeout = 10000 } = opts || {};
+    // 先查早到缓存
+    const now = Date.now();
+    this._orphan = this._orphan.filter((o) => now - o.ts < 10000);
+    for (let i = 0; i < this._orphan.length; i++) {
+      const o = this._orphan[i];
+      if (o.frame.opcode !== opcode) { continue; }
+      if (wantResult !== undefined && wantResult !== o.hasResult) { continue; }
+      this._orphan.splice(i, 1);
+      return Promise.resolve(o.frame);
+    }
+    return new Promise((resolve, reject) => {
+      const w = { opcode, wantResult, resolve, reject };
+      w.timer = setTimeout(() => {
+        const i = this._waiters.indexOf(w);
+        if (i >= 0) { this._waiters.splice(i, 1); }
+        reject(new PwdKeyError(0xFFFF, '等待设备响应超时'));
+      }, timeout);
+      const wrappedResolve = (f) => { clearTimeout(w.timer); resolve(f); };
+      w.resolve = wrappedResolve;
+      this._waiters.push(w);
+    });
+  }
+
+  _checkResult(frame) {
+    // 语义：无 RESULT_CODE 的帧视为成功响应（设备的部分成功响应不含该字段，
+    // 例如 DEVICE_INFO）；带 RESULT_CODE 的帧按码校验。
+    if (!proto.hasResult(frame.tlvs)) { return frame; }
+    const rc = proto.resultCode(frame.tlvs);
+    if (rc !== 0) {
+      // 附带锁定剩余秒数
+      const lv = proto.tlvLast(frame.tlvs, TAG.LOCK_SECONDS);
+      let msg = proto.errText(rc);
+      if ((rc === 0x4003) && lv) {
+        msg += `（剩余 ${proto.readU32le(lv, 0)} 秒）`;
+      }
+      throw new PwdKeyError(rc, msg);
+    }
+    return frame;
+  }
+
+  /* ---------------- 设备信息 ---------------- */
+
+  async refreshInfo() {
+    await this._send(OP.DEVICE_INFO, new Uint8Array(0));
+    const f = await this._waitFrame(OP.DEVICE_INFO, { timeout: 10000 });
+    this._checkResult(f);   // 成功响应无 RESULT_CODE -> 直接通过
+    const t = f.tlvs;
+    const fwv = proto.tlvLast(t, TAG.FW_VERSION);
+    const salt = proto.tlvLast(t, TAG.SALT);
+    const iter = proto.tlvLast(t, TAG.KDF_ITER);
+    const state = proto.tlvLast(t, TAG.STATE);
+    const cnt = proto.tlvLast(t, TAG.ENTRY_COUNT);
+    const lock = proto.tlvLast(t, TAG.LOCK_SECONDS);
+    this.info = {
+      fw: fwv ? `${fwv[0]}.${fwv[1]}.${fwv[2]}` : '?',
+      entryCount: cnt ? proto.readU16le(cnt, 0) : 0,
+      state: state ? proto.readU16le(state, 0) : 0,
+      lockSeconds: lock ? proto.readU32le(lock, 0) : 0,
+      salt: salt ? salt.slice() : null,
+      iter: iter ? proto.readU32le(iter, 0) : 0,
+      passwordSet: state ? !!(proto.readU16le(state, 0) & 0x0100) : false,
+    };
+    return this.info;
+  }
+
+  isUnlocked() {
+    return !!this.kek;
+  }
+
+  /* ---------------- 首次设置主密码（S0） ---------------- */
+
+  /**
+   * @param {string} pwd 主密码（纯 ASCII）
+   * @param {{onProgress?:(f:number)=>void, onWaiting?:()=>void}} cb
+   * @returns {Promise<string>} 恢复码（24 字符）
+   */
+  async setPassword(pwd, cb) {
+    const { onProgress, onWaiting } = cb || {};
+    if (!this.info || !this.info.salt) {
+      await this.refreshInfo();     // 尝试补一次设备信息
+    }
+    if (!this.info || !this.info.salt) {
+      throw new PwdKeyError(0xFFFF, '未获取到设备信息，请返回首页重新连接设备');
+    }
+    const pwdBytes = crypto.utf8ToBytes(pwd);
+    const kek = await crypto.deriveKekAsync(pwdBytes, this.info.salt,
+                                            this.info.iter, onProgress);
+    await this._send(OP.AUTH_NEW, tlv(TAG.KEK_BLOB, kek));
+    // 等第一帧：正常为 HALF-SYNC（无 RESULT_CODE）；错误帧则立即中止
+    const half = await this._waitFrame(OP.AUTH_NEW, { timeout: 10000 });
+    if (proto.hasResult(half.tlvs)) { this._checkResult(half); }
+    if (onWaiting) { onWaiting(); }
+    // ASYNC：用户按键后
+    const fin = await this._waitFrame(OP.AUTH_NEW, { wantResult: true, timeout: 65000 });
+    this._checkResult(fin);
+    const code = proto.tlvLast(fin.tlvs, TAG.RECOVERY_CODE);
+    this.kek = kek;
+    this.verifier = crypto.computeVerifier(kek);
+    await this.refreshInfo();
+    return code ? proto.bytesToAscii(code) : '';
+  }
+
+  /* ---------------- 认证 ---------------- */
+
+  /**
+   * @param {string} pwd
+   * @param {{onProgress?:(f:number)=>void}} cb
+   */
+  async unlock(pwd, cb) {
+    const { onProgress } = cb || {};
+    if (!this.info || !this.info.salt) { await this.refreshInfo(); }
+
+    await this._send(OP.AUTH_START, new Uint8Array(0));
+    const sf = await this._waitFrame(OP.AUTH_START, { timeout: 10000 });
+    if (proto.hasResult(sf.tlvs) && proto.resultCode(sf.tlvs) !== 0) {
+      this._checkResult(sf);
+    }
+    const nonce = proto.tlvLast(sf.tlvs, TAG.NONCE);
+    const seqb = proto.tlvLast(sf.tlvs, TAG.SESSION_SEQ);
+    if (!nonce || !seqb) { throw new PwdKeyError(0xFFFF, 'AUTH_START 响应异常'); }
+    const seq = proto.readU32le(seqb, 0);
+
+    const pwdBytes = crypto.utf8ToBytes(pwd);
+    const kek = await crypto.deriveKekAsync(pwdBytes, this.info.salt,
+                                            this.info.iter, onProgress);
+    const verifier = crypto.computeVerifier(kek);
+    const proof = crypto.computeProof(verifier, nonce, seq);
+
+    await this._send(OP.AUTH_VERIFY, proto.concatBytes(
+      tlv(TAG.NONCE, nonce),
+      tlv(TAG.PROOF, proof),
+      tlv(TAG.KEK_BLOB, kek)));
+    const fin = await this._waitFrame(OP.AUTH_VERIFY, { wantResult: true, timeout: 15000 });
+    this._checkResult(fin);
+
+    this.kek = kek;
+    this.verifier = verifier;
+    await this.refreshInfo();
+  }
+
+  async lock() {
+    if (!this.connected) {
+      this.kek = null; this.verifier = null;
+      return;
+    }
+    try {
+      await this._send(OP.AUTH_LOCK, new Uint8Array(0));
+      await this._waitFrame(OP.AUTH_LOCK, { timeout: 5000 });
+    } catch (e) { /* 忽略 */ }
+    this.kek = null;
+    this.verifier = null;
+  }
+
+  _requireUnlocked() {
+    if (!this.kek) { throw new PwdKeyError(0x4002, '请先解锁设备'); }
+  }
+
+  /* ---------------- 条目操作 ---------------- */
+
+  async listEntries() {
+    this._requireUnlocked();
+    await this._send(OP.PWD_LIST, new Uint8Array(0));
+    const f = await this._waitFrame(OP.PWD_LIST, { timeout: 10000 });
+    if (proto.hasResult(f.tlvs) && proto.resultCode(f.tlvs) !== 0) {
+      this._checkResult(f);
+    }
+    const ids = (f.tlvs[TAG.ENTRY_ID] || []).map((b) => proto.bytesToAscii(b));
+    return { ids, count: ids.length };
+  }
+
+  async addEntry(pwd, name) {
+    this._requireUnlocked();
+    const tlvs = proto.concatBytes(
+      tlv(TAG.SECRET, crypto.utf8ToBytes(pwd)),
+      tlv(TAG.NAME, crypto.utf8ToBytes(name || '')));
+    await this._send(OP.PWD_ADD, tlvs);
+    const f = await this._waitFrame(OP.PWD_ADD, { timeout: 10000 });
+    this._checkResult(f);
+    const id = proto.tlvLast(f.tlvs, TAG.ENTRY_ID);
+    await this.refreshInfo();
+    return id ? proto.bytesToAscii(id) : '';
+  }
+
+  async deleteEntry(id) {
+    this._requireUnlocked();
+    await this._send(OP.PWD_DELETE, tlv(TAG.ENTRY_ID, proto.asciiToBytes(id)));
+    const f = await this._waitFrame(OP.PWD_DELETE, { timeout: 10000 });
+    this._checkResult(f);
+    await this.refreshInfo();
+  }
+
+  async getEntryName(id) {
+    this._requireUnlocked();
+    await this._send(OP.ATTR_GET, tlv(TAG.ENTRY_ID, proto.asciiToBytes(id)));
+    const f = await this._waitFrame(OP.ATTR_GET, { timeout: 10000 });
+    this._checkResult(f);
+    const nm = proto.tlvLast(f.tlvs, TAG.NAME);
+    return nm ? utf8Decode(nm) : '';
+  }
+
+  /* ---------------- 已连接的电脑（命名与管理） ---------------- */
+
+  /** 6 字节 MAC -> "A1:B2:C3:D4:E5:F6" */
+  static macText(bytes) {
+    return proto.bytesToHex(bytes).toUpperCase().replace(/(.{2})(?=.)/g, '$1:');
+  }
+
+  /** 按 UTF-8 字节数截断，避免在 3 字节汉字中间断开产生乱码 */
+  static fitUtf8(str, maxBytes) {
+    const b = crypto.utf8ToBytes(str || '');
+    if (b.length <= maxBytes) { return String(str || ''); }
+    let cut = maxBytes;
+    /* 回退到完整字符边界：0x10xxxxxx/0x0xxxxxxx 是首字节，其余为续字节 */
+    while (cut > 0 && (b[cut] & 0xC0) === 0x80) { cut--; }
+    return utf8Decode(b.subarray(0, cut));
+  }
+
+  /**
+   * 读取设备的主机登记表（自动翻页）。
+   * 返回 [{ addr, mac, name, flags, online, hid, userNamed }]，在线的排前面。
+   */
+  async listHosts() {
+    this._requireUnlocked();
+    const out = [];
+    let total = 0;
+    for (let page = 0; page < 16; page++) {
+      const body = page === 0
+        ? new Uint8Array(0)
+        : tlv(TAG.PAGE_INDEX, new Uint8Array([page]));
+      await this._send(OP.HOST_LIST, body);
+      const f = await this._waitFrame(OP.HOST_LIST, { timeout: 10000 });
+      if (proto.hasResult(f.tlvs)) { this._checkResult(f); }
+
+      const addrs = f.tlvs[TAG.HOST_ADDR] || [];
+      const names = f.tlvs[TAG.HOST_NAME] || [];
+      const flags = f.tlvs[TAG.HOST_FLAGS] || [];
+      const cnt = f.tlvs[TAG.HOST_COUNT];
+      if (cnt && cnt.length) { total = cnt[cnt.length - 1][0]; }
+
+      for (let i = 0; i < addrs.length; i++) {
+        const fl = flags[i] ? flags[i][0] : 0;
+        out.push({
+          addr: addrs[i],
+          mac: PwdKey.macText(addrs[i]),
+          name: names[i] ? utf8Decode(names[i]) : PwdKey.macText(addrs[i]),
+          flags: fl,
+          online: !!(fl & proto.HOST_FLAG.ONLINE),
+          hid: !!(fl & proto.HOST_FLAG.HID_NOW),
+          userNamed: !!(fl & proto.HOST_FLAG.USER_NAMED),
+        });
+      }
+      if (addrs.length === 0 || out.length >= total) { break; }
+    }
+    return out.sort((a, b) => (b.online - a.online) || a.name.localeCompare(b.name));
+  }
+
+  /** 给某台电脑起名。name 为空字符串 = 清除自定义名，恢复 MAC 兜底名。 */
+  async renameHost(addrBytes, name) {
+    this._requireUnlocked();
+    const nm = PwdKey.fitUtf8(String(name || '').trim(), 31);
+    const parts = [tlv(TAG.HOST_ADDR, addrBytes)];
+    if (nm) { parts.push(tlv(TAG.HOST_NAME, crypto.utf8ToBytes(nm))); }
+    await this._send(OP.HOST_RENAME, proto.concatBytes(...parts));
+    const f = await this._waitFrame(OP.HOST_RENAME, { timeout: 10000 });
+    this._checkResult(f);
+  }
+
+  /** 断开某一台连接（不能断开承载本管理连接的那一台）。 */
+  async disconnectHost(addrBytes) {
+    this._requireUnlocked();
+    await this._send(OP.HOST_DISCONNECT, tlv(TAG.HOST_ADDR, addrBytes));
+    const f = await this._waitFrame(OP.HOST_DISCONNECT, { timeout: 10000 });
+    this._checkResult(f);
+  }
+
+  /* ---------------- 输出密码（核心） ---------------- */
+
+  /**
+   * 输出条目到电脑。
+   * @param {string} id 条目 ID
+   * @param {{onWaiting?:(timeoutMs:number)=>void,
+   *          onPickTarget?:(cands:Array<{addr:Uint8Array,mac:string,name:string}>)
+   *                        =>Promise<Uint8Array|null>}} cb
+   *   onPickTarget: 设备存在多条 HID 链路（多台电脑在线）时回调，入参为候选列表
+   *   （已带设备已知的名称）；返回选中的 MAC，或 null 表示取消。
+   * @returns {Promise<void>} 失败时抛出 PwdKeyError（含 0x3005 等特殊上下文）
+   */
+  async typeEntry(id, cb) {
+    this._requireUnlocked();
+    const { onWaiting, onPickTarget } = cb || {};
+    let targetAddr = null;   // 用户选择的输出目标（peer identity address）
+    let pickedOnce = false;  // 已选过一次但仍失败 -> 不再重复弹窗
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const parts = [
+        tlv(TAG.ENTRY_ID, proto.asciiToBytes(id)),
+        tlv(TAG.TIMEOUT_MS, proto.u16le(30000)),
+      ];
+      if (targetAddr) {
+        parts.push(tlv(TAG.HOST_ADDR, targetAddr));
+      }
+      await this._send(OP.PWD_TYPE, proto.concatBytes(...parts));
+
+      const half = await this._waitFrame(OP.PWD_TYPE, { timeout: 10000 });
+
+      if (proto.hasResult(half.tlvs)) {
+        const rc = proto.resultCode(half.tlvs);
+        if (rc === 0x3002 && onPickTarget && !pickedOnce) {
+          /* 设备回报"目标不明确"，并附上候选 MAC（连同它已知的名称） */
+          const addrs = half.tlvs[TAG.HOST_ADDR] || [];
+          const names = half.tlvs[TAG.HOST_NAME] || [];
+          if (!addrs.length) { this._checkResult(half); }
+          const cands = addrs.map((a, i) => ({
+            addr: a,
+            mac: PwdKey.macText(a),
+            name: names[i] ? utf8Decode(names[i]) : PwdKey.macText(a),
+          }));
+          const chosen = await onPickTarget(cands);
+          if (!chosen) {
+            throw new PwdKeyError(0x3004, '已取消选择目标');
+          }
+          targetAddr = chosen;
+          pickedOnce = true;
+          continue;   // 带目标重发
+        }
+        this._checkResult(half);
+      }
+
+      const tmo = proto.tlvLast(half.tlvs, TAG.TIMEOUT_MS);
+      const timeoutMs = tmo ? proto.readU16le(tmo, 0) : 30000;
+      if (onWaiting) { onWaiting(timeoutMs); }
+      const fin = await this._waitFrame(OP.PWD_TYPE, {
+        wantResult: true, timeout: timeoutMs + 20000,
+      });
+      this._checkResult(fin);
+      return;
+    }
+    throw new PwdKeyError(0x3002, '选择目标后仍无法输出，请稍后重试');
+  }
+
+  /* ---------------- 配对模式 ---------------- */
+
+  async enterPairing(cb) {
+    this._requireUnlocked();
+    const { onWaiting } = cb || {};
+    await this._send(OP.ENTER_PAIRING, new Uint8Array(0));
+    const half = await this._waitFrame(OP.ENTER_PAIRING, { timeout: 10000 });
+    if (proto.hasResult(half.tlvs)) { this._checkResult(half); }
+    if (onWaiting) { onWaiting(); }
+    const fin = await this._waitFrame(OP.ENTER_PAIRING, { wantResult: true, timeout: 65000 });
+    this._checkResult(fin);
+  }
+}
+
+/* 设备名（UTF-8 解码） */
+function utf8Decode(bytes) {
+  let s = '';
+  let i = 0;
+  while (i < bytes.length) {
+    const b = bytes[i];
+    if (b < 0x80) { s += String.fromCharCode(b); i += 1; }
+    else if (b < 0xE0) {
+      s += String.fromCharCode(((b & 0x1F) << 6) | (bytes[i + 1] & 0x3F)); i += 2;
+    } else if (b < 0xF0) {
+      s += String.fromCharCode(((b & 0x0F) << 12) | ((bytes[i + 1] & 0x3F) << 6) |
+                               (bytes[i + 2] & 0x3F)); i += 3;
+    } else {
+      const cp = ((b & 0x07) << 18) | ((bytes[i + 1] & 0x3F) << 12) |
+                 ((bytes[i + 2] & 0x3F) << 6) | (bytes[i + 3] & 0x3F);
+      const c = cp - 0x10000;
+      s += String.fromCharCode(0xD800 + (c >> 10), 0xDC00 + (c & 0x3FF));
+      i += 4;
+    }
+  }
+  return s;
+}
+
+module.exports = {
+  pwdkey: new PwdKey(),
+  PwdKeyError,
+  macText: PwdKey.macText,
+  fitUtf8: PwdKey.fitUtf8,
+};

@@ -1,0 +1,63 @@
+# ============================================================
+# PwdKey —— 提交前请确认下面这些"绝对不能进仓库"的东西被挡住了
+#   1) 签名私钥（jks / keystore / keystore.properties）
+#   2) 本机路径（local.properties）
+#   3) 微信开发者工具私有配置
+#   4) 内部工作目录 .workbuddy/（含个人笔记）
+# ============================================================
+
+# ---------- 密钥与签名（最重要）----------
+*.jks
+*.keystore
+keystore.properties
+*.p12
+*.pfx
+
+# ---------- ESP-IDF 固件 ----------
+pwdkey/build/
+pwdkey/sdkconfig
+pwdkey/sdkconfig.old
+pwdkey/managed_components/
+pwdkey/dependencies.lock
+*.bin
+*.elf
+*.map
+
+# ---------- 微信小程序 ----------
+pwdkey_app/project.private.config.json
+pwdkey_app/miniprogram_npm/
+
+# ---------- Android / Capacitor ----------
+pwdkey_android/node_modules/
+pwdkey_android/android/.gradle/
+pwdkey_android/android/build/
+pwdkey_android/android/app/build/
+pwdkey_android/android/local.properties
+pwdkey_android/android/capacitor-cordova-android-plugins/
+# cap copy 的产物（www 才是源文件）
+pwdkey_android/android/app/src/main/assets/public/
+pwdkey_android/android/app/src/main/assets/capacitor.config.json
+# esbuild 的产物（www/src 才是源文件）
+pwdkey_android/www/js/app.bundle.js
+
+# ---------- 构建日志 / 临时产物 ----------
+build_log*.txt
+*_log.txt
+build_gradle*.log
+build_out.txt
+build_exit.txt
+*.apk
+*.aab
+
+# ---------- 内部工作目录（个人笔记、脚本、串口日志）----------
+.workbuddy/
+
+# ---------- 操作系统 / 编辑器 ----------
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+*.swo
+*~

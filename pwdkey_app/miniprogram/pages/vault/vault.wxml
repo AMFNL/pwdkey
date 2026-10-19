@@ -1,0 +1,93 @@
+<view class="page">
+
+  <!-- 顶栏 -->
+  <view class="topbar">
+    <view class="topbar-info">
+      <view class="topbar-title">密码库</view>
+      <view class="muted">{{entries.length}} 条 · 点击条目进行操作</view>
+    </view>
+    <view class="topbar-actions">
+      <view class="icon-btn" bindtap="onHosts">🖥️</view>
+      <view class="icon-btn" bindtap="onPair">🔗</view>
+      <view class="icon-btn" bindtap="onLock">🔒</view>
+    </view>
+  </view>
+
+  <!-- 列表 -->
+  <view class="card list-card">
+    <view wx:if="{{loading}}" class="empty muted">读取中…</view>
+
+    <block wx:elif="{{entries.length}}">
+      <view class="entry" wx:for="{{entries}}" wx:key="id"
+            data-id="{{item.id}}" bindtap="onEntryTap">
+        <view class="entry-icon">🔑</view>
+        <view class="entry-body">
+          <view class="entry-name">{{item.name || '（读取名称中…）'}}</view>
+          <view class="entry-id mono">{{item.id}}</view>
+        </view>
+        <view class="entry-arrow">›</view>
+      </view>
+    </block>
+
+    <view wx:else class="empty">
+      <view class="empty-icon">📭</view>
+      <view class="muted">还没有密码条目</view>
+    </view>
+
+    <view wx:if="{{err}}" class="err-box">{{err}}</view>
+  </view>
+
+  <view class="card">
+    <button class="btn btn-primary" bindtap="showAddDialog">＋ 添加密码</button>
+    <button class="btn btn-ghost" bindtap="onPair">配对新电脑（键盘模式）</button>
+    <button class="btn btn-ghost" bindtap="onHosts">🖥️ 已连接的电脑（改名 / 断开）</button>
+  </view>
+
+  <view class="hint muted">
+    输出密码时：先在电脑上点入输入框，再在设备上短按 BOOT 确认。
+  </view>
+
+  <!-- 添加弹窗 -->
+  <view wx:if="{{showAdd}}" class="mask" bindtap="hideAddDialog">
+    <view class="dialog" catchtap="noop">
+      <view class="dialog-title">添加密码</view>
+      <view class="muted" style="text-align:center;margin-bottom:16rpx;">
+        密码将加密保存在设备中（纯 ASCII）
+      </view>
+      <input class="input plain" placeholder="名称（如：招行网银）" value="{{addName}}"
+             bindinput="onAddName" maxlength="64" />
+      <input class="input plain" password placeholder="密码" value="{{addPwd}}"
+             bindinput="onAddPwd1" maxlength="128" />
+      <input class="input plain" password placeholder="再次输入密码" value="{{addPwd2}}"
+             bindinput="onAddPwd2" maxlength="128" />
+      <view wx:if="{{addErr}}" class="err-box">{{addErr}}</view>
+      <button class="btn btn-primary" bindtap="onAddSubmit" disabled="{{adding}}">
+        {{adding ? '保存中…' : '保存到设备'}}
+      </button>
+      <button class="btn btn-ghost" bindtap="hideAddDialog">取消</button>
+    </view>
+  </view>
+
+  <!-- 输出等待浮层 -->
+  <view wx:if="{{typing}}" class="mask">
+    <view class="dialog" style="text-align:center;">
+      <view class="waiting-icon">⌨️</view>
+      <view class="dialog-title">请在设备上短按 BOOT 键</view>
+      <view class="countdown">{{typeCountdown}}s</view>
+      <view class="muted">
+        确认电脑上光标已在正确的输入框内<br/>长按设备按钮可取消
+      </view>
+    </view>
+  </view>
+
+  <!-- 配对等待浮层 -->
+  <view wx:if="{{pairing}}" class="mask">
+    <view class="dialog" style="text-align:center;">
+      <view class="waiting-icon">🔗</view>
+      <view class="dialog-title">请在设备上短按 BOOT 键</view>
+      <view class="countdown">{{pairingCountdown}}s</view>
+      <view class="muted">确认后设备将进入 60 秒配对模式</view>
+    </view>
+  </view>
+
+</view>
