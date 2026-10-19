@@ -9,6 +9,7 @@
       2) 蓝牙权限按 Android 12 (API 31) 的新模型声明：SCAN 标记 neverForLocation，
          因此不需要定位权限；Android 11 及以下仍走旧的 BLUETOOTH / 定位权限。
       3) allowBackup=false：设备配对信息不进入系统云备份。
+      4) DUMP 权限由依赖合并带入，已用 tools:node="remove" 移除。
     -->
 
     <application
@@ -84,5 +85,12 @@
     <!-- 显式声明不使用网络（Capacitor 模板默认会加，这里移除） -->
     <uses-permission
         android:name="android.permission.INTERNET"
+        tools:node="remove" />
+
+    <!-- 依赖（Capacitor / BLE 插件）在清单合并时会带入 DUMP。
+         该权限是 signature|privileged 级，普通安装拿不到，但对一个密码管理器来说
+         出现在权限列表里既不必要又容易引起误解，这里显式移除。 -->
+    <uses-permission
+        android:name="android.permission.DUMP"
         tools:node="remove" />
 </manifest>
