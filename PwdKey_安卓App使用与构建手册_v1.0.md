@@ -293,8 +293,8 @@ npm test
 | 项 | 值 |
 |---|---|
 | 路径 | `pwdkey_android/dist/PwdKey-1.1.0-release.apk`（原始产物在 `android/app/build/outputs/apk/release/`） |
-| 大小 | 3,171,853 字节（约 3.1 MB） |
-| SHA-256 | `41154f3f6db9dddffac979dde12ba87cf09212a84878018fee05005ac8ddb799` |
+| 大小 | 3,171,849 字节（约 3.1 MB） |
+| SHA-256 | `52e7b90460991cf98e90d00d8845cfe03aaa05270f9586237328fcd097825a4a` |
 | versionName / Code | `1.1.0` / `2` |
 | minSdk / targetSdk | 26 / 34 |
 | 权限 | Bluetooth 一组、`USE_BIOMETRIC`、`USE_FINGERPRINT`、`VIBRATE`；**无 INTERNET** |
