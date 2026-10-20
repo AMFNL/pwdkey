@@ -18,6 +18,7 @@ module.exports = {
           <div class="muted" id="v-count">读取中…</div>
         </div>
         <div class="topbar-actions">
+          <div class="icon-btn" id="v-sec">⚙️</div>
           <div class="icon-btn" id="v-hosts">🖥️</div>
           <div class="icon-btn" id="v-pair">🔗</div>
           <div class="icon-btn" id="v-lock">🔒</div>
@@ -48,6 +49,7 @@ module.exports = {
     let busy = false;          // 输出 / 配对进行中（防重入）
     let timers = {};
 
+    document.getElementById('v-sec').onclick = () => router.go('security');
     document.getElementById('v-hosts').onclick = () => router.go('hosts');
     document.getElementById('v-hosts2').onclick = () => router.go('hosts');
     document.getElementById('v-pair').onclick = onPair;

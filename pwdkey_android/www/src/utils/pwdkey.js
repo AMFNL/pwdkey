@@ -219,11 +219,11 @@ class PwdKey {
   /* ---------------- 认证 ---------------- */
 
   /**
-   * @param {string} pwd
-   * @param {{onProgress?:(f:number)=>void}} cb
+   * 用已持有的 KEK 完成一次 AUTH_VERIFY（不涉及密码派生）。
+   * 主密码路径与生物认证路径最终都汇到这里，保证两条路径的 PROOF 完全一致。
+   * @param {Uint8Array} kek 32 字节
    */
-  async unlock(pwd, cb) {
-    const { onProgress } = cb || {};
+  async _verifyKek(kek) {
     if (!this.info || !this.info.salt) { await this.refreshInfo(); }
 
     await this._send(OP.AUTH_START, new Uint8Array(0));
@@ -236,9 +236,6 @@ class PwdKey {
     if (!nonce || !seqb) { throw new PwdKeyError(0xFFFF, 'AUTH_START 响应异常'); }
     const seq = proto.readU32le(seqb, 0);
 
-    const pwdBytes = crypto.utf8ToBytes(pwd);
-    const kek = await crypto.deriveKekAsync(pwdBytes, this.info.salt,
-                                            this.info.iter, onProgress);
     const verifier = crypto.computeVerifier(kek);
     const proof = crypto.computeProof(verifier, nonce, seq);
 
@@ -252,6 +249,117 @@ class PwdKey {
     this.kek = kek;
     this.verifier = verifier;
     await this.refreshInfo();
+  }
+
+  /**
+   * @param {string} pwd
+   * @param {{onProgress?:(f:number)=>void}} cb
+   */
+  async unlock(pwd, cb) {
+    const { onProgress } = cb || {};
+    if (!this.info || !this.info.salt) { await this.refreshInfo(); }
+
+    const pwdBytes = crypto.utf8ToBytes(pwd);
+    const kek = await crypto.deriveKekAsync(pwdBytes, this.info.salt,
+                                            this.info.iter, onProgress);
+    await this._verifyKek(kek);
+  }
+
+  /**
+   * 生物认证路径：KEK 已由「生物解封 + PIN 解封」得到，跳过 PBKDF2。
+   * @param {Uint8Array} kek 32 字节
+   */
+  async unlockWithKek(kek) {
+    if (!kek || kek.length !== 32) {
+      throw new PwdKeyError(0xFFFF, 'KEK 长度不正确');
+    }
+    await this._verifyKek(kek);
+  }
+
+  /* ---------------- 修改主密码（v1.1） ---------------- */
+
+  /**
+   * 修改主密码：设备重加密全库，并生成【新的恢复码】（旧恢复码立即作废）。
+   *
+   * 协议（固件 v1.2，无需改固件）：
+   *   1) AUTH_NEW（空 TLV）          -> 设备等 BOOT 确认
+   *   2) 设备返回 NEW_SALT + KDF_ITER
+   *   3) 用新 salt 派生 newKek
+   *   4) AUTH_START                  -> nonce / seq
+   *   5) AUTH_NEW(NONCE, PROOF2, KEK_BLOB)  其中 PROOF2 = HMAC(旧 verifier, nonce||seq)
+   *
+   * 注意：PROOF2 用的是【旧】verifier，这是固件 C25 的约定。
+   *
+   * @param {string} oldPwd 仅用于本地校验（不会发给设备），防止误改
+   * @param {string} newPwd
+   * @param {{onProgress?:(f:number)=>void, onWaiting?:()=>void}} cb
+   * @returns {Promise<{recoveryCode:string, salt:Uint8Array, iter:number}>}
+   */
+  async changePassword(oldPwd, newPwd, cb) {
+    const { onProgress, onWaiting } = cb || {};
+    this._requireUnlocked();
+    if (!this.verifier) { throw new PwdKeyError(0x4002, '请先解锁设备'); }
+    if (!this.info || !this.info.salt) { await this.refreshInfo(); }
+
+    /* 先在本地确认旧密码确实是当前 KEK 的来源：算错的密码绝不会发到设备，
+       避免消耗设备的失败计数（10 次即永久锁定）。 */
+    const oldKek = await crypto.deriveKekAsync(
+      crypto.utf8ToBytes(oldPwd), this.info.salt, this.info.iter);
+    const same = oldKek.length === this.kek.length &&
+                 oldKek.every((b, i) => b === this.kek[i]);
+    if (!same) {
+      throw new PwdKeyError(0x4001, '当前主密码不正确');
+    }
+
+    /* --- 步骤 1：请求设备进入改密流程并生成新 salt --- */
+    await this._send(OP.AUTH_NEW, new Uint8Array(0));
+    const half = await this._waitFrame(OP.AUTH_NEW, { timeout: 10000 });
+    if (proto.hasResult(half.tlvs)) { this._checkResult(half); }
+    if (onWaiting) { onWaiting(); }
+
+    const s1 = await this._waitFrame(OP.AUTH_NEW, { wantResult: true, timeout: 65000 });
+    this._checkResult(s1);
+    const saltB = proto.tlvLast(s1.tlvs, TAG.NEW_SALT);
+    const iterB = proto.tlvLast(s1.tlvs, TAG.KDF_ITER);
+    if (!saltB || saltB.length !== 16) {
+      throw new PwdKeyError(0xFFFF, '设备未返回新 salt');
+    }
+    const newSalt = saltB.slice();
+    const iter = iterB ? proto.readU32le(iterB, 0) : this.info.iter;
+
+    /* --- 步骤 2：用新 salt 派生新 KEK --- */
+    const newKek = await crypto.deriveKekAsync(
+      crypto.utf8ToBytes(newPwd), newSalt, iter, onProgress);
+
+    /* --- 步骤 3：取 nonce，用旧 verifier 算 PROOF2 --- */
+    await this._send(OP.AUTH_START, new Uint8Array(0));
+    const sf = await this._waitFrame(OP.AUTH_START, { timeout: 10000 });
+    if (proto.hasResult(sf.tlvs) && proto.resultCode(sf.tlvs) !== 0) {
+      this._checkResult(sf);
+    }
+    const nonce = proto.tlvLast(sf.tlvs, TAG.NONCE);
+    const seqb = proto.tlvLast(sf.tlvs, TAG.SESSION_SEQ);
+    if (!nonce || !seqb) { throw new PwdKeyError(0xFFFF, 'AUTH_START 响应异常'); }
+    const proof2 = crypto.computeProof(this.verifier, nonce, proto.readU32le(seqb, 0));
+
+    await this._send(OP.AUTH_NEW, proto.concatBytes(
+      tlv(TAG.NONCE, nonce),
+      tlv(TAG.PROOF, proof2),
+      tlv(TAG.KEK_BLOB, newKek)));
+
+    const fin = await this._waitFrame(OP.AUTH_NEW, { wantResult: true, timeout: 60000 });
+    this._checkResult(fin);
+
+    this.kek = newKek;
+    this.verifier = crypto.computeVerifier(newKek);
+    const code = proto.tlvLast(fin.tlvs, TAG.RECOVERY_CODE);
+    await this.refreshInfo();      // 这会把 info.salt 更新为设备的新 salt
+
+    return {
+      recoveryCode: code ? proto.bytesToAscii(code) : '',
+      salt: newSalt,
+      iter: iter,
+    };
   }
 
   async lock() {

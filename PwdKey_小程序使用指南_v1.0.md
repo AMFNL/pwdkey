@@ -35,6 +35,10 @@
 
 > 编译若提示 `project.config.json` 相关，直接确认即可（文件已配置好 `miniprogramRoot`）。
 
+> **关于 AppID**：仓库里的 `project.config.json` 填的是 `touristappid`（游客模式），
+> 刻意不放任何真实 AppID。你要用自己的小程序发布时，把这一行改成自己的 AppID 即可；
+> 如果只是本地调试，用游客模式就够。改完请不要把真实 AppID 提交上来。
+
 ### 2.2 真机预览（必须）
 
 **⚠️ 蓝牙功能无法在模拟器使用**——必须真机：

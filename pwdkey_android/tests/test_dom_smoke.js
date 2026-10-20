@@ -46,6 +46,20 @@ win.scrollTo = () => {};
  * ============================================================ */
 const proto = require(path.join(__dirname, '..', 'www', 'src', 'libs', 'proto.js'));
 const { TAG, OP } = proto;
+const crypto = require(path.join(__dirname, '..', 'www', 'src', 'utils', 'crypto.js'));
+
+/* ---- 认证用的固定材料（让"生物 + PIN"这条链路可以端到端跑通） ---- */
+const KEK_OK = new Uint8Array(32).fill(0x42);
+const DEV_SALT = new Uint8Array(16).fill(7);
+const NONCE_FIXED = new Uint8Array(32).fill(0x11);
+const SEQ_FIXED = 1;
+const VERIFIER = crypto.computeVerifier(KEK_OK);
+
+function bytesEq(a, b) {
+  if (!a || !b || a.length !== b.length) { return false; }
+  for (let i = 0; i < a.length; i++) { if (a[i] !== b[i]) { return false; } }
+  return true;
+}
 
 const DEV_ID = 'AA:BB:CC:DD:EE:FF';
 const DEV_NAME = 'PwdKey-XXXX';
@@ -139,6 +153,25 @@ const fakeBle = {
     }
 
     /* 列表类命令回"空列表"，让页面走正常分支（否则会正确跳去解锁页） */
+    if (opcode === OP.AUTH_START) {
+      fakeBle._send(opcode, proto.concatBytes(
+        proto.tlv(TAG.REQUEST_ID, proto.u16le(rid)),
+        proto.tlv(TAG.NONCE, NONCE_FIXED),
+        proto.tlv(TAG.SESSION_SEQ, proto.u32le(SEQ_FIXED))));
+      return;
+    }
+    if (opcode === OP.AUTH_VERIFY) {
+      const nonce = proto.tlvLast(tlvs, TAG.NONCE);
+      const proof = proto.tlvLast(tlvs, TAG.PROOF);
+      const kek = proto.tlvLast(tlvs, TAG.KEK_BLOB);
+      const expect = crypto.computeProof(VERIFIER, nonce, SEQ_FIXED);
+      const ok = !!kek && kek.length === 32
+        && bytesEq(kek, KEK_OK)
+        && bytesEq(proof, expect);
+      result(ok ? 0 : 0x4001);
+      return;
+    }
+
     if (opcode === OP.PWD_LIST) {
       fakeBle._send(opcode, proto.concatBytes(
         proto.tlv(TAG.REQUEST_ID, proto.u16le(rid)),
@@ -173,6 +206,58 @@ require.cache[blePluginPath] = {
 };
 
 /* ============================================================
+ * 2.5 假的生物认证原生插件（BiometricWrap）
+ *
+ * 只模拟"外壳"：unwrap 交出信封、open 用 PIN 解出 KEK。
+ * 真正的 Keystore / BiometricPrompt 在设备上跑，无法在 Node 里测；
+ * 这里验证的是【页面的状态机与协议衔接】是否正确。
+ * ============================================================ */
+const bioMock = {
+  enrolled: false,
+  pin: '123456',
+  salt: DEV_SALT,
+  promptCount: 0,
+
+  async status() {
+    return {
+      available: true,
+      reason: 0,
+      reasonText: '设备支持强生物认证',
+      hasEnroll: this.enrolled,
+    };
+  },
+
+  async unwrap() {
+    this.promptCount++;
+    if (!this.enrolled) {
+      const e = new Error('尚未开启生物解锁');
+      e.code = 'NO_ENROLL';
+      throw e;
+    }
+    return { envelopeB64: 'RU5WRUxPUEU=' };
+  },
+
+  async open(args) {
+    if (args.pin !== this.pin) {
+      const e = new Error('PIN 不正确');
+      e.code = 'PIN_INVALID';
+      throw e;
+    }
+    return {
+      kekB64: Buffer.from(KEK_OK).toString('base64'),
+      deviceSaltB64: Buffer.from(this.salt).toString('base64'),
+      pinIter: 600000,
+    };
+  },
+
+  async enroll() { this.enrolled = true; return { ok: true }; },
+  async clear() { this.enrolled = false; return { ok: true }; },
+};
+
+const biowrap = require(path.join(__dirname, '..', 'www', 'src', 'utils', 'biowrap.js'));
+biowrap.setMock(bioMock);
+
+/* ============================================================
  * 3. 载入应用
  * ============================================================ */
 const router = require(path.join(__dirname, '..', 'www', 'src', 'router.js'));
@@ -197,6 +282,16 @@ function assert(cond, name, extra) {
 const $ = (sel) => document.querySelector(sel);
 const text = (sel) => ($(sel) ? $(sel).textContent.trim() : '');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** 按 PIN 键盘上的数字（位置是随机的，按 data-k 找） */
+function clickPin(pin) {
+  for (const ch of String(pin)) {
+    const key = document.querySelector(`.pin-key[data-k="${ch}"]`);
+    if (!key) { return false; }
+    key.click();
+  }
+  return true;
+}
 
 /* ============================================================
  * 5. 流程
@@ -237,6 +332,37 @@ async function main() {
   router.back();
   await sleep(50);
   assert(router.depth() === 1, '返回后栈深度为 1');
+
+  console.log('== 生物解锁：salt 不匹配时必须拒绝（不消耗设备失败计数）==');
+  bioMock.enrolled = true;
+  bioMock.salt = new Uint8Array(16).fill(9);   // 模拟设备主密码已被改过
+  router.reset('unlock');
+  await sleep(120);
+  assert(text('.title') === '输入 6 位 PIN', '自动进入 PIN 输入态', text('.title'));
+  assert(clickPin('123456'), '能找到 6 个 PIN 按键');
+  await sleep(350);
+  assert(text('.dialog-title').indexOf('过期') >= 0,
+    'salt 不匹配时提示"指纹解锁已过期"', text('.dialog-title'));
+  const staleOk = $('.dialog [data-act="ok"]');
+  if (staleOk) { staleOk.click(); }
+  await sleep(80);
+  assert(pwdkey.isUnlocked() === false, 'salt 不匹配时没有建立会话');
+
+  console.log('== 生物解锁：PIN 错误计数 ==');
+  bioMock.salt = DEV_SALT;
+  bioMock.enrolled = true;
+  router.reset('unlock');
+  await sleep(120);
+  clickPin('000000');
+  await sleep(300);
+  assert(text('.err-box').indexOf('还可尝试 4 次') >= 0,
+    'PIN 错误后提示剩余次数', text('.err-box'));
+
+  console.log('== 生物解锁：正确 PIN 走通全链路 ==');
+  assert(clickPin('123456'), '重新输入正确 PIN');
+  await sleep(400);
+  assert(pwdkey.isUnlocked() === true, '生物 + PIN 解锁成功，会话已建立');
+  assert(text('.page-topbar-title') === '密码库', '解锁后进入密码库', text('.page-topbar-title'));
 
   console.log('== 密码库页渲染（伪造已解锁）==');
   /* 直接伪造会话，绕过 PBKDF2 —— 本测试只关心 UI 不崩 */

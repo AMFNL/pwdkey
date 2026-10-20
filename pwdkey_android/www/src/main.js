@@ -5,6 +5,7 @@
 const ui = require('./ui.js');
 const router = require('./router.js');
 const ble = require('./utils/ble.js');
+const biowrap = require('./utils/biowrap.js');
 const { pwdkey } = require('./utils/pwdkey.js');
 
 router.register('index', require('./pages/index.js'));
@@ -12,6 +13,8 @@ router.register('setup', require('./pages/setup.js'));
 router.register('unlock', require('./pages/unlock.js'));
 router.register('vault', require('./pages/vault.js'));
 router.register('hosts', require('./pages/hosts.js'));
+router.register('security', require('./pages/security.js'));
+router.register('change-pwd', require('./pages/change-pwd.js'));
 
 /* ---------------- 启动 ---------------- */
 
@@ -41,6 +44,10 @@ ble.onConnectionLost(() => {
 /* ---------------- 切后台自动锁定 ----------------
  * 与小程序一致：退到后台即销毁设备会话（KEK 从内存清除）。
  * 延时 800ms 再锁，避免系统权限弹窗造成的瞬时失焦误锁。
+ *
+ * v1.1 补充：系统生物识别浮窗在部分 ROM 上会让 Activity 短暂 onStop，
+ * 从而触发 WebView 的 visibilitychange。此时若照常锁定，会出现
+ * "刚验证完指纹就被自己锁掉"。所以生物弹窗显示期间跳过自动锁定。
  */
 
 let hideTimer = null;
@@ -50,7 +57,9 @@ document.addEventListener('visibilitychange', () => {
     if (hideTimer) { clearTimeout(hideTimer); }
     hideTimer = setTimeout(() => {
       hideTimer = null;
-      if (document.hidden && pwdkey.isUnlocked()) {
+      if (!document.hidden) { return; }
+      if (biowrap.isPrompting()) { return; }   // 生物弹窗中，不锁
+      if (pwdkey.isUnlocked()) {
         pwdkey.lock().catch(() => {});
       }
     }, 800);
@@ -62,7 +71,8 @@ document.addEventListener('visibilitychange', () => {
 /* 页面从后台恢复时，如果停在需要解锁的页面但会话已失效，回首页 */
 window.addEventListener('pageshow', () => {
   const page = router.current();
-  if ((page === 'vault' || page === 'hosts') && !pwdkey.isUnlocked()) {
+  const guarded = ['vault', 'hosts', 'security', 'change-pwd'];
+  if (guarded.indexOf(page) >= 0 && !pwdkey.isUnlocked()) {
     router.reset('index');
   }
 });

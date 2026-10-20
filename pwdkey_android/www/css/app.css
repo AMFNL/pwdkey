@@ -567,3 +567,89 @@ body {
 @media (-webkit-min-device-pixel-ratio: 2) {
   .row, .entry, .host, .device-item { border-bottom-width: 0.5px; }
 }
+
+/* ============================================================
+   v1.1 PIN 键盘（components/pinpad.js）
+   按键位置每次随机，用来对抗"看一次就永久泄露"的肩窥
+   ============================================================ */
+
+.pinpad { margin-top: 1rem; }
+
+.pin-dots {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin: 1.2rem 0 0.8rem;
+}
+.pin-dot {
+  width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 50%;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  margin: 0 0.6rem;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.pin-dot.on { background: var(--c-primary); border-color: var(--c-primary); }
+
+.pin-msg {
+  text-align: center;
+  min-height: 1.9rem;
+  font-size: 1.3rem;
+  color: var(--c-danger);
+}
+
+.pin-keys {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  margin-top: 0.4rem;
+}
+.pin-key {
+  height: 4.4rem;
+  margin: 0.4rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 2.2rem;
+  font-weight: 500;
+  color: var(--c-text);
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.8rem;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.pin-key:active { background: #e2e8f0; }
+.pin-key-fn { font-size: 1.5rem; color: var(--c-muted); }
+
+.pinpad.pin-busy { opacity: 0.6; pointer-events: none; }
+
+.pin-shake { animation: pin-shake 0.3s ease; }
+@keyframes pin-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-6px); }
+  75% { transform: translateX(6px); }
+}
+
+/* 全屏 PIN 弹层 */
+.pin-mask {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 1.6rem;
+  padding-bottom: calc(1.6rem + env(safe-area-inset-bottom));
+}
+.pin-mask .pinpad {
+  width: 100%;
+  max-width: 34rem;
+  background: #ffffff;
+  border-radius: 1rem;
+  padding: 1.6rem;
+}
+.pin-cancel {
+  margin-top: 1.4rem;
+  padding: 0.8rem 2.4rem;
+  color: var(--c-muted);
+  font-size: 1.4rem;
+}

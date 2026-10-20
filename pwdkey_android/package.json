@@ -1,13 +1,13 @@
 {
   "name": "pwdkey-app",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "PwdKey - BLE password injector companion app (offline Android build)",
   "scripts": {
     "build:web": "esbuild www/src/main.js --bundle --outfile=www/js/app.bundle.js --format=iife --target=es2018 --legal-comments=none",
-    "sync": "npm run build:web && cap copy android",
+    "sync": "npm run build:web && cap sync android",
     "apk": "npm run sync && cd android && gradlew.bat assembleRelease",
-    "test": "node tests/test_crypto_equiv.js && node tests/test_dom_smoke.js"
+    "test": "node tests/test_crypto_equiv.js && node tests/test_change_pwd.js && node tests/test_dom_smoke.js && node tests/verify_bundle.js"
   },
   "dependencies": {
     "@capacitor-community/bluetooth-le": "^6.1.0",

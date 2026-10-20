@@ -170,7 +170,7 @@ python -c "import re;c=open('sdkconfig',encoding='utf-8').read();[print(k,re.sea
 |---|---|---|
 | 1 | 启动自检 | ✅ `report handles: in=46 out=50`（C2 句柄捕获正确，非 0 且不等）；PSRAM 8MB@80MHz |
 | 2 | eFuse 安全基线 | ✅ `SPI_BOOT_CRYPT_CNT=0`、`SECURE_BOOT_EN=False`、JTAG 未禁（零 eFuse 承诺落实） |
-| 3 | BLE 广播 | ✅ 扫描到 `PwdKey-XXXX`（RSSI≈-33），名称/MAC 与设计一致 |
+| 3 | BLE 广播 | ✅ 扫描到 `PwdKey-XXXX`（RSSI≈-33），名称/MAC 与设计一致（实测广播名已脱敏） |
 | 4 | GATT 服务表 | ✅ 管理服务 0xFFF0（0xFFF1~FFF5 全部正确）+ BAS + DIS + GAP |
 | 5 | 配对与加密 | ✅ Just Works 配对成功；`enc_change status=0` 加密链路建立 |
 | 6 | **Auth Challenge** | ✅ 读 0xFFF1 返回 **36 字节** = NONCE(32) + SEQ(4 LE)，与协议 P-2 完全一致 |

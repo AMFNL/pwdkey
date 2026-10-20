@@ -12,6 +12,8 @@ ext {
     androidxFragmentVersion = '1.6.2'
     coreSplashScreenVersion = '1.0.1'
     androidxWebkitVersion = '1.9.0'
+    // v1.1 生物认证：1.1.0 起支持 CryptoObject 与 BIOMETRIC_STRONG 兼容封装
+    androidxBiometricVersion = '1.1.0'
     junitVersion = '4.13.2'
     androidxJunitVersion = '1.1.5'
     androidxEspressoCoreVersion = '3.5.1'

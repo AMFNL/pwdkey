@@ -97,19 +97,37 @@ console.log("== JS <-> Python cross-check ==");
   const nonceHex = "00112233445566778899aabbccddeeff0102030405060708090a0b0c0d0e0f10";
   const seq = 3450719210;
 
-  const pyOut = execFileSync("python3",
-    ["ref_python_calc.py", pwd, saltHex, String(iters), nonceHex, String(seq)],
-    { cwd: __dirname }).toString().trim().split(/\r?\n/);
+  // Python 解释器：优先读环境变量 PYTHON，否则依次尝试常见命令名。
+  // 故意不写死绝对路径，避免把开发者本机目录带进仓库。
+  function findPython() {
+    const cands = [process.env.PYTHON, "python3", "python", "py"].filter(Boolean);
+    for (const exe of cands) {
+      try {
+        execFileSync(exe, ["--version"], { stdio: "ignore" });
+        return exe;
+      } catch (_) { /* 试下一个 */ }
+    }
+    return null;
+  }
 
-  const kek = crypto.pbkdf2Sha256(
-    crypto.utf8ToBytes(pwd), proto.hexToBytes(saltHex), iters);
-  const verifier = crypto.computeVerifier(kek);
-  const proof = crypto.computeProof(verifier, proto.hexToBytes(nonceHex), seq);
+  const py = findPython();
+  if (!py) {
+    console.log("  SKIP: 未找到 python，跳过 JS<->Python 对拍（设 PYTHON 环境变量可指定）");
+  } else {
+    const pyOut = execFileSync(py,
+      ["ref_python_calc.py", pwd, saltHex, String(iters), nonceHex, String(seq)],
+      { cwd: __dirname }).toString().trim().split(/\r?\n/);
 
-  assert(proto.bytesToHex(kek) === pyOut[0], "KEK matches python");
-  assert(proto.bytesToHex(verifier) === pyOut[1], "VERIFIER matches python");
-  assert(proto.bytesToHex(proof) === pyOut[2], "PROOF matches python");
-  console.log(`  KEK = ${proto.bytesToHex(kek)}`);
+    const kek = crypto.pbkdf2Sha256(
+      crypto.utf8ToBytes(pwd), proto.hexToBytes(saltHex), iters);
+    const verifier = crypto.computeVerifier(kek);
+    const proof = crypto.computeProof(verifier, proto.hexToBytes(nonceHex), seq);
+
+    assert(proto.bytesToHex(kek) === pyOut[0], "KEK matches python");
+    assert(proto.bytesToHex(verifier) === pyOut[1], "VERIFIER matches python");
+    assert(proto.bytesToHex(proof) === pyOut[2], "PROOF matches python");
+    console.log(`  KEK = ${proto.bytesToHex(kek)}`);
+  }
 }
 
 console.log(failures === 0 ? "\nALL TESTS PASSED" : `\n${failures} FAILURES`);

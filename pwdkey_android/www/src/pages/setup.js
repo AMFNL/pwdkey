@@ -3,6 +3,7 @@
  * 阶段：input -> computing -> waiting -> done
  */
 const { pwdkey } = require('../utils/pwdkey.js');
+const bioenroll = require('../utils/bioenroll.js');
 const ui = require('../ui.js');
 const router = require('../router.js');
 
@@ -141,6 +142,15 @@ module.exports = {
           <button class="btn btn-ghost" id="s-copy">${copied ? '已复制 ✓' : '复制恢复码'}</button>
           <button class="btn btn-primary" id="s-done">我已抄写，完成</button>
         </div>
+
+        <div class="card">
+          <div class="title">开启生物解锁（推荐）</div>
+          <div class="muted">
+            设置一个 6 位 PIN，之后用<b>指纹或面容 + PIN</b>解锁，
+            不必每次输入长主密码。两者缺一不可；主密码仍然保留作为兜底。
+          </div>
+          <button class="btn btn-primary" id="s-bio">☝️ 设置指纹 / 面容解锁</button>
+        </div>
       `;
       document.getElementById('s-copy').onclick = async () => {
         const ok = await ui.copyText(recoveryCode);
@@ -151,6 +161,12 @@ module.exports = {
       document.getElementById('s-done').onclick = () => {
         ui.toast('设备已启用');
         router.goHome();
+      };
+      document.getElementById('s-bio').onclick = async () => {
+        const ok = await bioenroll.enable({ silent: false });
+        if (ok) {
+          router.goHome();
+        }
       };
     }
 

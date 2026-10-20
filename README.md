@@ -59,6 +59,7 @@ sequenceDiagram
 
 ## 特性
 
+- **生物解锁（安卓 App v1.1）** — 指纹 / 面容 + 6 位 PIN 两层串联，缺一不可；PIN 键盘位置每次随机
 - **硬件加密存储** — AES-256-GCM，密钥由主密码派生，永不写入 Flash 明文
 - **免驱键盘输出** — 标准 BLE HID，Windows / macOS / Linux / Android / iOS 都能用
 - **物理按键确认** — 每次输出必须在设备上按一下
@@ -87,14 +88,13 @@ pwdkey/                 ESP-IDF 固件（C）
   main/                   BLE HID、管理服务、加密存储、会话、审计
 pwdkey_app/             微信小程序（原生 WXML/WXSS/JS）
 pwdkey_android/         安卓 App（Capacitor + Web 前端 + 原生 BLE 桥）
-  www/src/               前端源码（含从小程序复用的协议与加密层）
-  tests/                 加密等价性对拍 + jsdom 全链路冒烟
+  www/src/               前端源码（含从小程序复用的协议与加密层、PIN 键盘组件）
+  tests/                 加密等价性对拍 + 改密码协议对拍 + jsdom 全链路冒烟
 tests/miniprogram/      协议 / 加密 / 业务流程测试（Node）
 PwdKey_使用手册_v1.0.md              给使用者
 PwdKey_小程序使用指南_v1.0.md         微信版说明
 PwdKey_安卓App使用与构建手册_v1.0.md   安卓版说明
 PwdKey_固件操作部署手册_v1.0.md        烧录 / 协议 / 勘误
-ESP32-S3_BLE密码输入器_项目开发总纲_v1.1.md   设计依据
 ```
 
 ## 快速开始
@@ -152,6 +152,7 @@ App → 密码库 → 配对新电脑 → 设备上按 BOOT
 | 手机 App 被替换 / 被远程控制 | 输出前必须**物理按键确认** |
 | 设备丢失 | 密码库用主密码派生的密钥加密，没主密码打不开 |
 | 有人捡到设备暴力试密码 | 3/6/10 次渐进锁定，第 10 次永久锁定 |
+| 手机被捡到（已开启生物解锁） | 没通过 TEE 生物认证，连可以爆破 PIN 的密文都拿不到 |
 
 ### 防不住的（重要，请务必读完）
 
@@ -162,6 +163,8 @@ App → 密码库 → 配对新电脑 → 设备上按 BOOT
 | **摄像头 / 肩窥** | 密码会显示在屏幕上。 |
 | **刷了别人的固件** | 固件是开源的，你可以自己审；但如果你烧了来源不明的固件，一切保证失效。 |
 | **物理拆解 + 侧信道** | 没有做防拆封装、没有做侧信道防护。这是开发板方案，不是金融级安全芯片。 |
+| **手机被 root / 内存被 hook** | 生物解锁在解封瞬间 KEK 仍是明文。任何手机端方案都有这条上限；设备侧的物理按键仍是最后一道关。 |
+| **6 位 PIN 抗不住离线爆破** | PIN 只有 20 bit。它靠的是"必须先过 TEE 生物认证"这道硬门，本身不是抗爆破因子。 |
 
 > 一句话定位：**它防的是"远程"和"软件层面"的窃取，不是防 NSA。**
 
@@ -190,7 +193,7 @@ TLV:    TAG(1) | LEN(LE16) | VALUE
 # 协议 / 加密 / 业务流程（Node，无需硬件）
 cd tests/miniprogram && node test_flow.js
 
-# 安卓 App：加密等价性对拍 + jsdom 全链路冒烟
+# 安卓 App：加密等价性对拍 + 改密码协议对拍 + jsdom 全链路冒烟
 cd pwdkey_android && npm install && npm test
 ```
 
@@ -198,13 +201,26 @@ cd pwdkey_android && npm install && npm test
 
 安卓侧额外验证：**WebCrypto 加速版与纯 JS 版的 KEK / VERIFIER / PROOF 逐字节一致**（含 20 万次真实迭代，并与 Node 原生 `pbkdf2Sync` 三方对拍）。
 
+另有 `verify_bundle.js` 检查 `app.bundle.js` 里确实含 v1.1 新增代码——`index.html` 加载的是
+打包产物而非源码，只改 `www/src` 不重新打包会让 APK 静默跑旧逻辑，这个检查专防该坑。
+
 ### 重新打 APK
 
 ```bash
 cd pwdkey_android
 npm install
-npm run apk        # = build:web + cap copy + gradlew assembleRelease
+npm run apk        # = build:web + cap sync android + gradlew assembleRelease
 ```
+
+首次构建前需要有 `android/local.properties` 指向本机 SDK（已被 `.gitignore` 排除）：
+
+```properties
+sdk.dir=C\:\\Android\\Sdk
+```
+
+本机（Windows）实测环境：JDK 17 + Android SDK（android-34 / build-tools 34.0.0）
++ Gradle 8.2.1，`BUILD SUCCESSFUL` 产出约 3.1 MB 的 `dist/PwdKey-1.1.0-release.apk`。
+完整环境表与出包核对命令见[构建手册 §8](PwdKey_安卓App使用与构建手册_v1.0.md)。
 
 签名：请自行生成 keystore 并写入 `android/keystore.properties`（格式见
 [构建手册 §9](PwdKey_安卓App使用与构建手册_v1.0.md)）。**该文件与 `.jks` 已被 `.gitignore` 排除。**
@@ -225,7 +241,6 @@ npm run apk        # = build:web + cap copy + gradlew assembleRelease
 | [安卓 App 使用与构建手册](PwdKey_安卓App使用与构建手册_v1.0.md) | 安装 App / 改代码重新打包 |
 | [小程序使用指南](PwdKey_小程序使用指南_v1.0.md) | 微信版说明与版本记录 |
 | [固件操作部署手册](PwdKey_固件操作部署手册_v1.0.md) | 烧录、协议细节、联调勘误 |
-| [项目开发总纲](ESP32-S3_BLE密码输入器_项目开发总纲_v1.1.md) | 设计依据与需求冻结记录 |
 
 ## 贡献
 
