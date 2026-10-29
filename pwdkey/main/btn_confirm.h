@@ -13,6 +13,7 @@ typedef enum {
     BTN_REQ_ENTER_PAIRING,    /* confirm opening the HID pairing window */
     BTN_REQ_FACTORY_RESET,    /* second-confirm factory reset */
     BTN_REQ_AUTH_NEW,         /* confirm primary password set/change */
+    BTN_REQ_EXPORT,           /* confirm encrypted vault export */
 } btn_req_type_t;
 
 typedef struct {

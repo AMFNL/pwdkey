@@ -70,10 +70,10 @@ module.exports = {
 
       listEl.innerHTML = hosts.map((h) => `
         <div class="host ${h.online ? '' : 'host-off'}" data-mac="${ui.esc(h.mac)}">
-          <div class="host-icon">${h.hid ? '⌨️' : '📱'}</div>
+          <div class="host-icon">${h.isUsb ? '🔌' : (h.hid ? '⌨️' : '📱')}</div>
           <div class="host-body">
-            <div class="host-name">${ui.esc(h.name)}${h.userNamed ? '<span class="tag">自定义</span>' : ''}</div>
-            <div class="host-mac mono">${ui.esc(h.mac)}</div>
+            <div class="host-name">${ui.esc(h.name)}${h.isUsb ? '<span class="tag tag-usb">USB</span>' : ''}${h.userNamed ? '<span class="tag">自定义</span>' : ''}</div>
+            <div class="host-mac mono">${h.isUsb ? (h.online ? '已通过数据线连接' : '未插线') : ui.esc(h.mac)}</div>
           </div>
           <div class="host-status">
             <div class="dot ${h.online ? 'dot-on' : 'dot-off'}"></div>
@@ -95,10 +95,10 @@ module.exports = {
       const el = ui.h(`<div class="mask" id="h-act">
         <div class="dialog">
           <div class="dialog-title">${ui.esc(h.name)}</div>
-          <div class="muted" style="text-align:center;margin-bottom:0.8rem">${ui.esc(h.mac)}</div>
+          <div class="muted" style="text-align:center;margin-bottom:0.8rem">${h.isUsb ? 'USB 直连（有线）' : ui.esc(h.mac)}</div>
           <button class="btn btn-primary" data-act="rename">✏️ 改名</button>
-          <button class="btn btn-ghost" data-act="reset">恢复默认名（电脑 XXXX）</button>
-          <button class="btn btn-danger" data-act="disc">断开这台</button>
+          <button class="btn btn-ghost" data-act="reset">恢复默认名（${h.isUsb ? 'USB 直连' : '电脑 XXXX'}）</button>
+          ${h.isUsb ? '' : '<button class="btn btn-danger" data-act="disc">断开这台</button>'}
           <button class="btn btn-ghost" data-act="close">关闭</button>
         </div>
       </div>`);

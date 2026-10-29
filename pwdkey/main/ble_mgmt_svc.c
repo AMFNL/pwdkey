@@ -44,9 +44,17 @@
 #include "sec_session.h"
 #include "ble_gap_mgr.h"
 #include "ble_hid_kbd.h"
+#include "usb_hid_kbd.h"
 #include "host_reg.h"
 
 static const char *TAG = "mgmt";
+
+/* 加密导出命令（实现放在文件末尾，这里先声明） */
+static void h_pwd_export_begin(uint16_t conn, uint8_t opcode, const uint8_t *tlv, uint16_t len);
+static void h_pwd_export_chunk(uint16_t conn, uint8_t opcode, const uint8_t *tlv, uint16_t len);
+static void export_cooldown_boot(void);
+static void h_recovery_setup(uint16_t conn, uint8_t opcode, const uint8_t *tlv, uint16_t len);
+static void h_recovery_restore(uint16_t conn, uint8_t opcode, const uint8_t *tlv, uint16_t len);
 
 /* ---------------- constants ---------------- */
 
@@ -67,6 +75,10 @@ static const char *TAG = "mgmt";
 #define OP_PWD_DELETE       0x23
 #define OP_PWD_TYPE         0x24
 #define OP_ATTR_GET         0x25
+#define OP_PWD_EXPORT_BEGIN 0x26      /* 开始加密导出（需 BOOT 确认） */
+#define OP_PWD_EXPORT_CHUNK 0x27      /* 按偏移取密文块 */
+#define OP_RECOVERY_SETUP   0x28      /* 生成 5 份恢复码（需 BOOT） */
+#define OP_RECOVERY_RESTORE 0x29      /* 用 3 份恢复码重设主密码 */
 #define OP_ENTER_PAIRING    0x40
 #define OP_AUDIT_READ       0x41
 #define OP_HOST_LIST        0x42      /* named hosts (connected PCs) */
@@ -105,6 +117,15 @@ static const char *TAG = "mgmt";
 #define T_HOST_NAME     0x21      /* UTF-8, <= HOST_NAME_MAX-1 */
 #define T_HOST_FLAGS    0x22      /* 1 byte, see HOST_FLAG_* */
 #define T_HOST_COUNT    0x23      /* 1 byte, total records (for paging) */
+/* 加密导出（0x26/0x27） */
+#define T_EXPORT_WRAPPED 0x30     /* 60B: wrap_nonce(12)+ct(32)+tag(16) */
+#define T_EXPORT_NONCE   0x31     /* 12B: data 的 GCM nonce */
+#define T_EXPORT_TOTAL   0x32     /* 4B LE: 密文总长 */
+#define T_EXPORT_OFFSET  0x33     /* 4B LE: 块偏移 */
+#define T_EXPORT_DATA    0x34     /* 密文块 */
+/* 恢复码（0x28/0x29） */
+#define T_REC_IDX   0x35          /* 1 字节：第几份（1..5） */
+#define T_REC_DATA  0x36          /* 16 字节：该份内容 */
 
 /* errors */
 #define E_OK            0x0000
@@ -231,6 +252,7 @@ typedef struct {
     uint8_t  entry_id[8];
     uint8_t  target8;           /* TARGET_HANDLE low byte, 0xFF = none */
     uint16_t hid_conn;          /* picked HID link (PWD_TYPE) */
+    bool     via_usb;           /* PWD_TYPE 走 USB 通道，而非 BLE */
     uint32_t timeout_ms;
     uint8_t  tlv[512];
     uint16_t tlv_len;
@@ -520,6 +542,18 @@ static void send_hid_ambiguous(uint16_t conn, uint8_t opcode, uint16_t rid)
         tlv_put_u8(buf, sizeof(buf), &off, T_HOST_FLAGS,
                    (uint8_t)(HOST_FLAG_ONLINE | HOST_FLAG_HID_NOW |
                              ((r != NULL) ? (r->flags & HOST_FLAG_USER_NAMED) : 0)));
+    }
+
+    /* USB 通道也作为一个可选目标（地址全 0，插上即在线） */
+    if (usb_hid_mounted()) {
+        static const uint8_t usb_addr[6] = { 0 };
+        const host_rec_t *ur = host_reg_find(usb_addr);
+        const char *un = (ur != NULL) ? ur->name : "USB \xE7\x9B\xB4\xE8\xBF\x9E";
+        if (tlv_put(buf, sizeof(buf), &off, T_HOST_ADDR, usb_addr, 6) == 0) {
+            tlv_put(buf, sizeof(buf), &off, T_HOST_NAME, un, strlen(un));
+            tlv_put_u8(buf, sizeof(buf), &off, T_HOST_FLAGS,
+                       (uint8_t)(HOST_FLAG_ONLINE | HOST_FLAG_HID_NOW | HOST_FLAG_IS_USB));
+        }
     }
     mgmt_send_response(conn, opcode, buf, off);
 }
@@ -1216,12 +1250,21 @@ static void h_host_list(uint16_t conn, uint8_t opcode, const uint8_t *tlv, uint1
     uint16_t start = (uint16_t)page * HOST_PAGE_SIZE;
     uint16_t n = 0;
     for (uint16_t i = start; i < (uint16_t)total && n < HOST_PAGE_SIZE; i++, n++) {
-        uint8_t flags = recs[i].flags & (HOST_FLAG_USER_NAMED | HOST_FLAG_IS_HID);
-        if (gap_mgr_addr_is_online(recs[i].addr)) {
-            flags |= HOST_FLAG_ONLINE;
-        }
-        if (addr_has_hid(recs[i].addr)) {
-            flags |= HOST_FLAG_HID_NOW;
+        uint8_t flags = recs[i].flags &
+                        (HOST_FLAG_USER_NAMED | HOST_FLAG_IS_HID | HOST_FLAG_IS_USB);
+        if (recs[i].flags & HOST_FLAG_IS_USB) {
+            /* USB 通道：在线与否看主机有没有枚举我们。
+             * 插上即"可直接输出"，不存在配对/订阅这一步。 */
+            if (usb_hid_mounted()) {
+                flags |= HOST_FLAG_ONLINE | HOST_FLAG_HID_NOW;
+            }
+        } else {
+            if (gap_mgr_addr_is_online(recs[i].addr)) {
+                flags |= HOST_FLAG_ONLINE;
+            }
+            if (addr_has_hid(recs[i].addr)) {
+                flags |= HOST_FLAG_HID_NOW;
+            }
         }
         if (tlv_put(buf, sizeof(buf), &off, T_HOST_ADDR, recs[i].addr, 6) != 0 ||
             tlv_put(buf, sizeof(buf), &off, T_HOST_NAME,
@@ -1278,6 +1321,11 @@ static void h_host_disconnect(uint16_t conn, uint8_t opcode, const uint8_t *tlv,
         send_err(conn, opcode, E_MISSING);
         return;
     }
+    /* USB 通道是物理连接，软件断不开（强行断开也会中断正在进行的输出） */
+    if (HOST_ADDR_IS_USB(av)) {
+        send_result(conn, opcode, rid, E_UNSUPPORTED);
+        return;
+    }
     uint16_t target = gap_mgr_conn_by_addr(av);
     if (target == 0xFFFF) {
         send_result(conn, opcode, rid, E_NOT_FOUND);
@@ -1312,39 +1360,71 @@ static void h_pwd_type(uint16_t conn, uint8_t opcode, const uint8_t *tlv, uint16
         return;
     }
 
-    /* pick HID target - addressed by identity address (stable), not conn_handle */
+    /* ---- 目标通道判定 ----
+     * T_HOST_ADDR 全 0 → USB 通道（约定，见《PwdKey_协议v1.3_输出通道设计》）
+     * 未指定地址 → 只在"在线通道数 == 1"时自动选；多条时让 App 选
+     */
     uint8_t hc = gap_mgr_hid_link_count();
-    uint16_t hid_conn = 0;
+    bool usb_ok = usb_hid_mounted();
+    uint16_t hid_conn = 0xFFFF;
+    bool via_usb = false;
     bool has_addr = tlv_get(tlv, len, T_HOST_ADDR, &tv, &tvl) && tvl == 6;
-    if (hc == 0) {
-        send_result(conn, opcode, rid, E_NO_HID);
-        return;
-    }
-    if (has_addr) {
-        hid_conn = gap_mgr_conn_by_addr(tv);
-        bool is_hid = false;
-        for (uint8_t i = 0; i < hc; i++) {
-            if (gap_mgr_hid_link_at(i) == hid_conn) {
-                is_hid = true;
-                break;
-            }
+
+    if (has_addr && HOST_ADDR_IS_USB(tv)) {
+        via_usb = true;                       /* App 明确指定了有线 */
+    } else if (!has_addr) {
+        uint8_t chans = (uint8_t)(hc + (usb_ok ? 1 : 0));
+        if (chans == 0) {
+            send_result(conn, opcode, rid, E_NO_HID);
+            return;
         }
-        if (hid_conn == 0xFFFF || !is_hid) {
-            /* peer vanished / never had HID - give the App a fresh candidate list */
+        if (chans > 1) {
             send_hid_ambiguous(conn, opcode, rid);
+            return;
+        }
+        via_usb = (hc == 0);                  /* 唯一在线通道是有线 */
+    }
+
+    if (via_usb) {
+        if (!usb_ok) {
+            send_result(conn, opcode, rid, E_NO_HID);
+            return;
+        }
+        if (usb_hid_busy()) {
+            send_result(conn, opcode, rid, E_HID_BUSY);
             return;
         }
     } else {
-        if (hc != 1) {
-            send_hid_ambiguous(conn, opcode, rid);
+        /* ---- 以下为原有 BLE 路径，行为保持不变 ---- */
+        if (hc == 0) {
+            send_result(conn, opcode, rid, E_NO_HID);
             return;
         }
-        hid_conn = gap_mgr_hid_link_at(0);
-    }
-
-    if (hid_kbd_busy()) {
-        send_result(conn, opcode, rid, E_HID_BUSY);
-        return;
+        if (has_addr) {
+            hid_conn = gap_mgr_conn_by_addr(tv);
+            bool is_hid = false;
+            for (uint8_t i = 0; i < hc; i++) {
+                if (gap_mgr_hid_link_at(i) == hid_conn) {
+                    is_hid = true;
+                    break;
+                }
+            }
+            if (hid_conn == 0xFFFF || !is_hid) {
+                /* peer vanished / never had HID - give the App a fresh candidate list */
+                send_hid_ambiguous(conn, opcode, rid);
+                return;
+            }
+        } else {
+            if (hc != 1) {
+                send_hid_ambiguous(conn, opcode, rid);
+                return;
+            }
+            hid_conn = gap_mgr_hid_link_at(0);
+        }
+        if (hid_kbd_busy()) {
+            send_result(conn, opcode, rid, E_HID_BUSY);
+            return;
+        }
     }
 
     /* entry must exist */
@@ -1385,6 +1465,7 @@ static void h_pwd_type(uint16_t conn, uint8_t opcode, const uint8_t *tlv, uint16
     job.timeout_ms = tmo;
     job.target8 = 0xFF;
     job.hid_conn = hid_conn;
+    job.via_usb = via_usb;
     if (!heavy_submit(&job)) {
         send_result(conn, opcode, rid, E_BUSY);
         return;
@@ -1562,6 +1643,10 @@ static void process_frame(uint16_t conn, uint8_t opcode, const uint8_t *tlv, uin
     case OP_PWD_UPDATE:     h_pwd_update(conn, opcode, tlv, len); break;
     case OP_PWD_DELETE:     h_pwd_delete(conn, opcode, tlv, len); break;
     case OP_PWD_TYPE:       h_pwd_type(conn, opcode, tlv, len); break;
+    case OP_PWD_EXPORT_BEGIN: h_pwd_export_begin(conn, opcode, tlv, len); break;
+    case OP_PWD_EXPORT_CHUNK: h_pwd_export_chunk(conn, opcode, tlv, len); break;
+    case OP_RECOVERY_SETUP:   h_recovery_setup(conn, opcode, tlv, len); break;
+    case OP_RECOVERY_RESTORE: h_recovery_restore(conn, opcode, tlv, len); break;
     case OP_ATTR_GET:       h_attr_get(conn, opcode, tlv, len); break;
     case OP_ENTER_PAIRING:  h_enter_pairing(conn, opcode, tlv, len); break;
     case OP_AUDIT_READ:     h_audit_read(conn, opcode, tlv, len); break;
@@ -1579,6 +1664,14 @@ static void process_frame(uint16_t conn, uint8_t opcode, const uint8_t *tlv, uin
 static void on_kbd_done(uint16_t conn, esp_err_t result)
 {
     (void)conn;
+    s_type_done_result = result;
+    xSemaphoreGive(s_type_done_sem);
+}
+
+/* USB 通道的完成回调（签名少一个 conn 参数），复用同一个信号量。
+ * 两条通道不会并发输出：进入前已做 busy 检查。 */
+static void on_usb_done(esp_err_t result)
+{
     s_type_done_result = result;
     xSemaphoreGive(s_type_done_sem);
 }
@@ -1650,7 +1743,11 @@ static void run_pwd_type(heavy_job_t *job)
 
     /* drain any stale completion */
     xSemaphoreTake(s_type_done_sem, 0);
-    err = hid_kbd_type_string(hid_conn, pwd, plen);
+    if (job->via_usb) {
+        err = usb_hid_type_string(pwd, plen);
+    } else {
+        err = hid_kbd_type_string(hid_conn, pwd, plen);
+    }
     memset(pwd, 0, sizeof(pwd));    /* hid layer holds its own copy */
     if (err != ESP_OK) {
         uint16_t rc2 = (err == ESP_ERR_INVALID_ARG) ? E_LAYOUT : E_HID_BUSY;
@@ -2010,6 +2107,253 @@ esp_err_t mgmt_svc_init(void)
         return ESP_ERR_NO_MEM;
     }
     hid_kbd_set_done_cb(on_kbd_done);
+    usb_hid_set_done_cb(on_usb_done);
+    export_cooldown_boot();       /* 上次导出的冷却若没走完，从本次上电重新计时 */
     ESP_LOGI(TAG, "management service ready");
     return ESP_OK;
+}
+
+/* ---------------- 加密导出（明文永不出设备）----------------
+ *
+ * 流程：BEGIN（BOOT 确认一次）→ 拿到 wrapped/nonce/total → 反复 CHUNK 取密文。
+ * 设备侧只有密文，App 侧只接触 32 字节的 K_export，条目明文全程不出芯片。
+ */
+
+#define EXPORT_COOLDOWN_MS  (30u * 60u * 1000u)   /* 30 分钟，两次导出之间的最小间隔 */
+static uint32_t s_cool_start_ms;                  /* 冷却起算点（本次上电的时间轴） */
+
+/* 若上次导出后冷却没走完就重启了，从本次上电时刻重新计时。
+ * 设备没有 RTC，算不出真实间隔，所以宁可让用户多等，也不给重启绕过留口子。 */
+static void export_cooldown_boot(void)
+{
+    if (store_export_cooldown_get()) {
+        s_cool_start_ms = 0;
+    }
+}
+
+static void h_pwd_export_begin(uint16_t conn, uint8_t opcode, const uint8_t *tlv, uint16_t len)
+{
+    uint16_t rid = rid_of(conn, tlv, len);
+    if (!require_auth(conn, opcode, rid)) {
+        return;
+    }
+    /* 导出是高危操作，认证必须足够新鲜 */
+    if (session_age_ms(conn) > CFG_PWD_TYPE_MAX_AUTH_AGE_MS) {
+        send_result(conn, opcode, rid, E_AUTH_STALE);
+        return;
+    }
+    const uint8_t *kek = session_kek(conn);
+    if (kek == NULL) {
+        send_result(conn, opcode, rid, E_NOT_AUTH);
+        return;
+    }
+
+    /* 限速 30 分钟，且冷却标记持久化 —— 拔电重启也要重新等满 */
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+    if (store_export_cooldown_get()) {
+        uint32_t elapsed = now - s_cool_start_ms;
+        if (elapsed < EXPORT_COOLDOWN_MS) {
+            uint16_t wait_s = (uint16_t)((EXPORT_COOLDOWN_MS - elapsed + 999) / 1000);
+            uint8_t buf[32];
+            uint16_t off = 0;
+            tlv_put_u16(buf, sizeof(buf), &off, T_REQUEST_ID, rid);
+            tlv_put_u16(buf, sizeof(buf), &off, T_RESULT_CODE, E_BUSY);
+            tlv_put_u16(buf, sizeof(buf), &off, T_ERR_DETAIL, wait_s);
+            mgmt_send_response(conn, opcode, buf, off);
+            return;
+        }
+        (void)store_export_cooldown_set(false);      /* 冷却结束 */
+    }
+
+    uint16_t rc = confirm_request(conn, BTN_REQ_EXPORT, CFG_CONFIRM_DEFAULT_MS);
+    if (rc != E_OK) {
+        audit_append(0x08, conn, NULL, rc);
+        send_result(conn, opcode, rid, rc);
+        return;
+    }
+
+    uint8_t wrapped[60];
+    uint8_t dnonce[12];
+    size_t total = 0;
+    esp_err_t err = store_export_build(kek, wrapped, dnonce, &total);
+    if (err != ESP_OK) {
+        send_result(conn, opcode, rid,
+                    (err == ESP_ERR_NOT_FOUND) ? E_NOT_FOUND : E_INTERNAL);
+        return;
+    }
+    s_cool_start_ms = now;
+    (void)store_export_cooldown_set(true);
+
+    uint8_t buf[128];
+    uint16_t off = 0;
+    tlv_put_u16(buf, sizeof(buf), &off, T_REQUEST_ID, rid);
+    tlv_put(buf, sizeof(buf), &off, T_EXPORT_WRAPPED, wrapped, 60);
+    tlv_put(buf, sizeof(buf), &off, T_EXPORT_NONCE, dnonce, 12);
+    tlv_put_u32(buf, sizeof(buf), &off, T_EXPORT_TOTAL, (uint32_t)total);
+    mgmt_send_response(conn, opcode, buf, off);
+
+    audit_append(0x08, conn, NULL, E_OK);
+}
+
+static void h_pwd_export_chunk(uint16_t conn, uint8_t opcode, const uint8_t *tlv, uint16_t len)
+{
+    uint16_t rid = rid_of(conn, tlv, len);
+    if (!require_auth(conn, opcode, rid)) {
+        return;
+    }
+    const uint8_t *ov;
+    uint16_t ol;
+    if (!tlv_get(tlv, len, T_EXPORT_OFFSET, &ov, &ol) || ol != 4) {
+        send_err(conn, opcode, E_MISSING);
+        return;
+    }
+    uint32_t offset = (uint32_t)ov[0] | ((uint32_t)ov[1] << 8) |
+                      ((uint32_t)ov[2] << 16) | ((uint32_t)ov[3] << 24);
+
+    uint8_t data[512];
+    uint16_t got = 0;
+    esp_err_t err = store_export_chunk((uint16_t)offset, data, sizeof(data), &got);
+    if (err != ESP_OK) {
+        send_result(conn, opcode, rid,
+                    (err == ESP_ERR_INVALID_STATE) ? E_NOT_FOUND : E_INTERNAL);
+        return;
+    }
+
+    uint8_t buf[560];
+    uint16_t off = 0;
+    tlv_put_u16(buf, sizeof(buf), &off, T_REQUEST_ID, rid);
+    tlv_put_u32(buf, sizeof(buf), &off, T_EXPORT_OFFSET, offset);
+    tlv_put(buf, sizeof(buf), &off, T_EXPORT_DATA, data, got);
+    mgmt_send_response(conn, opcode, buf, off);
+}
+
+/* ---------------- 恢复码（3-of-5）----------------
+ *
+ * SETUP：会话解锁 + BOOT 确认 → 生成 5 份，返回给 App 显示
+ * RESTORE：**不需要会话**（主密码忘了就没有会话），凭 3 份码 + 新 KEK 重设
+ *
+ * 安全边界：任意 3 份恢复码即可重建 DEK，不需要主密码。
+ * 这是 Shamir 的数学必然，所以 5 张纸必须分开保管。
+ */
+
+static void h_recovery_setup(uint16_t conn, uint8_t opcode, const uint8_t *tlv, uint16_t len)
+{
+    uint16_t rid = rid_of(conn, tlv, len);
+    if (!require_auth(conn, opcode, rid)) {
+        return;
+    }
+    const uint8_t *kek = session_kek(conn);
+    if (kek == NULL) {
+        send_result(conn, opcode, rid, E_NOT_AUTH);
+        return;
+    }
+    if (session_age_ms(conn) > CFG_PWD_TYPE_MAX_AUTH_AGE_MS) {
+        send_result(conn, opcode, rid, E_AUTH_STALE);
+        return;
+    }
+
+    /* 生成恢复码会触发 DEK 迁移（首次），属于高危操作，必须物理确认 */
+    uint16_t rc = confirm_request(conn, BTN_REQ_EXPORT, CFG_CONFIRM_DEFAULT_MS);
+    if (rc != E_OK) {
+        audit_append(0x09, conn, NULL, rc);
+        send_result(conn, opcode, rid, rc);
+        return;
+    }
+
+    uint8_t shares[5 * 16];
+    esp_err_t err = store_recovery_setup(kek, shares);
+    if (err != ESP_OK) {
+        memset(shares, 0, sizeof(shares));
+        send_result(conn, opcode, rid, E_INTERNAL);
+        return;
+    }
+
+    uint8_t buf[256];
+    uint16_t off = 0;
+    tlv_put_u16(buf, sizeof(buf), &off, T_REQUEST_ID, rid);
+    for (uint8_t i = 0; i < 5; i++) {
+        tlv_put_u8(buf, sizeof(buf), &off, T_REC_IDX, (uint8_t)(i + 1));
+        tlv_put(buf, sizeof(buf), &off, T_REC_DATA, shares + (size_t)i * 16, 16);
+    }
+    mgmt_send_response(conn, opcode, buf, off);
+
+    memset(shares, 0, sizeof(shares));
+    audit_append(0x09, conn, NULL, E_OK);
+}
+
+static void h_recovery_restore(uint16_t conn, uint8_t opcode, const uint8_t *tlv, uint16_t len)
+{
+    uint16_t rid = rid_of(conn, tlv, len);
+
+    /* 这里刻意不调 require_auth：用户正是因为忘了主密码才走这条路 */
+
+    uint8_t xs[3];
+    uint8_t datas[3 * 16];
+    uint8_t n = 0;
+    uint8_t pending_idx = 0;
+    const uint8_t *p = tlv;
+    const uint8_t *end = tlv + len;
+
+    /* 遍历 TLV，收集 (idx, share) 对。
+     * 注意：TLV 的长度字段是 **2 字节小端**（见 App 侧 proto.js 的 tlv()：
+     * concatBytes([tag], u16le(len), value)）。一开始按 1 字节写，整个流错位，
+     * 一组都读不出来，设备只好回 E_MISSING。 */
+    while ((size_t)(end - p) >= 3 && n < 3) {
+        uint8_t tag = p[0];
+        uint16_t l = (uint16_t)(p[1] | ((uint16_t)p[2] << 8));
+        const uint8_t *v = p + 3;
+        if ((size_t)(end - v) < (size_t)l) {
+            break;
+        }
+        if (tag == T_REC_IDX && l == 1) {
+            pending_idx = v[0];
+        } else if (tag == T_REC_DATA && l == 16 && pending_idx >= 1 && pending_idx <= 5) {
+            xs[n] = pending_idx;
+            memcpy(datas + (size_t)n * 16, v, 16);
+            n++;
+            pending_idx = 0;
+        }
+        p += 3 + l;
+    }
+
+    if (n < 3) {
+        send_result(conn, opcode, rid, E_MISSING);
+        return;
+    }
+
+    const uint8_t *kek_new;
+    uint16_t kl;
+    if (!tlv_get(tlv, len, T_KEK_BLOB, &kek_new, &kl) || kl != 32) {
+        send_result(conn, opcode, rid, E_KEK_MISSING);
+        return;
+    }
+
+    /* 物理确认：防止有人拿偷来的 3 张纸远程恢复 */
+    uint16_t rc = confirm_request(conn, BTN_REQ_AUTH_NEW, CFG_CONFIRM_DEFAULT_MS);
+    if (rc != E_OK) {
+        audit_append(0x0A, conn, NULL, rc);
+        send_result(conn, opcode, rid, rc);
+        return;
+    }
+
+    esp_err_t err = store_recovery_restore(xs, datas, n, kek_new);
+    memset(datas, 0, sizeof(datas));
+    if (err != ESP_OK) {
+        sys_fail_bump();
+        audit_append(0x0A, conn, NULL, E_RECOVERY_BAD);
+        uint8_t ls = sys_lock_state();
+        send_result(conn, opcode, rid,
+                    (ls == 2) ? E_LOCKED_PERM :
+                    (ls == 1) ? E_LOCKED_TEMP : E_RECOVERY_BAD);
+        return;
+    }
+
+    /* 新主密码的校验值必须一起更新，否则下次解锁会判定密码错误 */
+    uint8_t verifier[32];
+    sec_store_compute_verifier(kek_new, verifier);
+    (void)cred_set_verifier(verifier);
+    memset(verifier, 0, sizeof(verifier));
+
+    audit_append(0x0A, conn, NULL, E_OK);
+    send_result(conn, opcode, rid, E_OK);
 }

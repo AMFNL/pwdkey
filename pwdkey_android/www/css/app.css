@@ -234,6 +234,8 @@ body {
   line-height: 1.6;
   text-align: center;
   margin: 0.8rem 0 0.4rem;
+  /* 允许内容里的 \n 真正换行（能力探测等多行信息用得到） */
+  white-space: pre-line;
   white-space: pre-wrap;
 }
 .dialog-actions { display: flex; }
@@ -549,6 +551,25 @@ body {
   padding: 0.1rem 0.5rem;
   margin-left: 0.6rem;
   vertical-align: middle;
+}
+/* USB（有线）通道的标识，用青绿区分于蓝色"自定义" */
+.tag-usb {
+  color: #0f6e56;
+  background: #e1f5ee;
+}
+/* 设置页的开关行 */
+.bio-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 0.9rem;
+  font-size: 1.3rem;
+  color: var(--c-text);
+}
+.bio-row input[type="checkbox"] {
+  width: 1.6rem;
+  height: 1.6rem;
+  accent-color: var(--c-primary);
 }
 .host-mac { font-size: 1.1rem; color: #94a3b8; margin-top: 0.2rem; }
 

@@ -37,6 +37,7 @@
 #include "sec_session.h"
 #include "audit_log.h"
 #include "ble_hid_kbd.h"
+#include "usb_hid_kbd.h"
 #include "host_reg.h"
 #include "ble_mgmt_svc.h"
 #include "ble_gap_mgr.h"
@@ -63,7 +64,12 @@ void app_main(void)
     /* A. button first (no NVS needed) */
     ESP_ERROR_CHECK(btn_confirm_init());
 
-    /* B. NVS - must precede NimBLE */
+    /* B. NVS - must precede NimBLE
+     *
+     * 两个独立分区：
+     *   "nvs"   —— 系统 NVS，给 NimBLE 存绑定/配对信息；丢了只是要重新配对
+     *   "vault" —— ★密码库，固定在 flash 12 MB；固件区最大 11.9 MB，永远碰不到
+     */
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -71,10 +77,20 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(err);
 
+    err = nvs_flash_init_partition(CFG_PART_VAULT);
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        /* 首次上电、或分区大小/版本变化：擦一次再初始化 */
+        ESP_LOGW(TAG, "vault partition needs format, erasing...");
+        ESP_ERROR_CHECK(nvs_flash_erase_partition(CFG_PART_VAULT));
+        err = nvs_flash_init_partition(CFG_PART_VAULT);
+    }
+    ESP_ERROR_CHECK(err);
+
     /* C. power-on hold >=5s on BOOT = factory reset (pure physical path) */
     if (btn_boot_factory_reset_check()) {
         ESP_LOGW(TAG, "Factory reset by BOOT key, rebooting...");
-        nvs_flash_erase();
+        nvs_flash_erase();                              /* 系统 NVS */
+        nvs_flash_erase_partition(CFG_PART_VAULT);      /* ★密码库 */
         esp_restart();
     }
 
@@ -84,6 +100,14 @@ void app_main(void)
     sec_session_init();
     ESP_ERROR_CHECK(audit_log_init());
     ESP_ERROR_CHECK(host_reg_init());      /* named-host registry (own NVS namespace) */
+
+    /* D2. USB HID 键盘后端（有线通道）
+     * 失败不致命：没有 USB 硬件或驱动问题时退化为纯 BLE 工作。
+     * 注意 console 必须已切到 UART，否则 USB-Serial-JTAG 会占着 GPIO19/20。 */
+    esp_err_t uerr = usb_hid_init();
+    if (uerr != ESP_OK) {
+        ESP_LOGW(TAG, "USB HID 不可用（%s），仅 BLE 可用", esp_err_to_name(uerr));
+    }
 
     /* E. NimBLE controller + host */
     ESP_ERROR_CHECK(nimble_port_init());

@@ -86,6 +86,10 @@ const OP = {
   PWD_DELETE: 0x23,
   PWD_TYPE: 0x24,
   ATTR_GET: 0x25,
+  PWD_EXPORT_BEGIN: 0x26,   // 开始加密导出（设备内加密，需 BOOT 确认）
+  PWD_EXPORT_CHUNK: 0x27,   // 按偏移取密文块
+  RECOVERY_SETUP: 0x28,     // 生成 5 份恢复码（需 BOOT 确认）
+  RECOVERY_RESTORE: 0x29,   // 用 3 份恢复码重设主密码
   ENTER_PAIRING: 0x40,
   AUDIT_READ: 0x41,
   HOST_LIST: 0x42,          // 已配对/已连接的电脑列表
@@ -125,12 +129,23 @@ const TAG = {
   HOST_NAME: 0x21,          // UTF-8 名称
   HOST_FLAGS: 0x22,         // 位标记
   HOST_COUNT: 0x23,         // 记录总数（分页用）
+  // 加密导出
+  EXPORT_WRAPPED: 0x30,     // 60B: wrap_nonce(12)+ct(32)+tag(16)
+  EXPORT_NONCE: 0x31,       // 12B: data 的 GCM nonce
+  EXPORT_TOTAL: 0x32,       // 4B LE: 密文总长
+  EXPORT_OFFSET: 0x33,      // 4B LE: 块偏移
+  EXPORT_DATA: 0x34,        // 密文块
+  // 恢复码
+  REC_IDX: 0x35,            // 1B: 第几份（1..5）
+  REC_DATA: 0x36,           // 16B: 该份内容
 };
 
-/* HOST_FLAGS 位定义：低 2 位是持久标记，高 2 位是查询时实时状态 */
+/* HOST_FLAGS 位定义：
+ * 低 3 位是持久标记，高 2 位是查询时实时状态 */
 const HOST_FLAG = {
   USER_NAMED: 0x01,         // 用户自定义过名字（自动探测不得覆盖）
   IS_HID: 0x02,             // 曾作为 HID 键盘链路
+  IS_USB: 0x04,             // USB 通道（有线），addr 恒为全 0
   ONLINE: 0x40,             // 当前在线
   HID_NOW: 0x80,            // 当前是活跃的 HID 链路
 };

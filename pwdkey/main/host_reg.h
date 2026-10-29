@@ -15,10 +15,17 @@
 /* flags (persisted) */
 #define HOST_FLAG_USER_NAMED  0x01   /* name typed by the user - never auto-overwritten */
 #define HOST_FLAG_IS_HID      0x02   /* was seen holding an HID (keyboard) link */
+#define HOST_FLAG_IS_USB      0x04   /* USB 通道（有线），不是真实 BLE 主机 */
 
 /* flags reported in T_HOST_FLAGS - runtime only, never persisted */
 #define HOST_FLAG_ONLINE      0x40   /* currently connected */
 #define HOST_FLAG_HID_NOW     0x80   /* currently an active HID link */
+
+/* USB 通道的哨兵地址：全 0。
+ * USB HID 协议里设备无法得知主机身份，所以有线永远只有这一条记录。 */
+#define HOST_ADDR_IS_USB(a) \
+    ((a)[0] == 0 && (a)[1] == 0 && (a)[2] == 0 && \
+     (a)[3] == 0 && (a)[4] == 0 && (a)[5] == 0)
 
 typedef struct {
     uint8_t  addr[6];

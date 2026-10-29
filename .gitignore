@@ -61,3 +61,13 @@ desktop.ini
 *.swp
 *.swo
 *~
+
+# ---------- 临时测试工程（140MB，含 build 产物）----------
+pwdkey_usb_hid_test/
+
+# ---------- 本机编译产物 ----------
+*.exe
+*.obj
+*.o
+__pycache__/
+*.pyc

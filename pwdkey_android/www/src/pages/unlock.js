@@ -184,14 +184,15 @@ module.exports = {
 
           ${err ? `<div class="err-box">${ui.esc(err)}</div>` : ''}
 
-          <button class="btn btn-primary" id="u-go" ${(!pwd || busy) ? 'disabled' : ''}>解锁</button>
+          <button class="btn btn-primary" id="u-go">解锁</button>
           ${(bio.hasEnroll && bio.available)
             ? '<button class="btn btn-ghost" id="u-bio">☝️ 改用指纹 / 面容解锁</button>' : ''}
+          <button class="btn btn-ghost" id="u-recover">用恢复码重置主密码</button>
         </div>
 
         <div class="hint muted">
           连续输错 3 次锁定 30 秒 / 6 次锁定 5 分钟 / 10 次永久锁定。<br>
-          忘记主密码：请用恢复码重置（会清空全部密码）。
+          忘记主密码可用 5 份恢复码中的任意 3 份重置，<b>数据不会被清空</b>。
         </div>
       `;
 
@@ -199,8 +200,8 @@ module.exports = {
       input.oninput = () => {
         pwd = input.value;
         err = '';
-        const btn = document.getElementById('u-go');
-        btn.disabled = !pwd || busy;
+        /* 不再在这里禁用按钮：按钮始终可点，密码为空时由 onUnlock 提示。
+         * 之前只要 pwd 变量与输入框不同步，按钮就会一直是灰的。 */
       };
       input.onkeydown = (ev) => { if (ev.key === 'Enter' && pwd && !busy) { onUnlock(); } };
       document.getElementById('u-show').onclick = () => { showPwd = !showPwd; draw(); };
@@ -209,9 +210,132 @@ module.exports = {
       const bioBtn = document.getElementById('u-bio');
       if (bioBtn) { bioBtn.onclick = startBio; }
 
+      const recBtn = document.getElementById('u-recover');
+      if (recBtn) { recBtn.onclick = onRecover; }
+
       /* 桌面调试时直接聚焦，手机上由用户点击（避免一进页面就弹键盘挡住按钮） */
       if (window.matchMedia && window.matchMedia('(min-width: 640px)').matches) {
         input.focus();
+      }
+    }
+
+    /* ---------------- 用恢复码重置主密码 ----------------
+     *
+     * 不需要旧主密码：设备会用 3 份码重建 recovery_key，解开 DEK，
+     * 再用新主密码派生的 KEK 重新包裹。**条目一个字节都不动。**
+     */
+
+    async function onRecover() {
+      if (busy) { return; }
+
+      /* 1. 收 3 份码（逐份输入，避免一次性粘错） */
+      const codes = [];
+      for (let i = 0; i < 3; i++) {
+        const r1 = await ui.modal({
+          title: `第 ${i + 1} 份恢复码`,
+          content: '先输入这份码的序号（1–5）',
+          editable: true,
+          placeholderText: '例如 2',
+          maxLength: 1,
+          confirmText: '下一步',
+        });
+        if (!r1.confirm) { return; }
+        const idx = parseInt((r1.content || '').trim(), 10);
+        if (!(idx >= 1 && idx <= 5)) {
+          ui.toast('序号必须是 1 到 5');
+          return;
+        }
+        if (codes.some((c) => c.idx === idx)) {
+          ui.toast('同一份不能用两次，请换一份');
+          return;
+        }
+
+        const r2 = await ui.modal({
+          title: `第 ${idx} 份内容`,
+          content: '输入这一份的 26 个字符',
+          editable: true,
+          placeholderText: 'ABCDEFGHJKLMNPQRSTUVWXYZ2345',
+          maxLength: 40,
+          confirmText: '确定',
+        });
+        if (!r2.confirm) { return; }
+        const code = (r2.content || '').trim();
+        if (!code) {
+          ui.toast('内容不能为空');
+          return;
+        }
+        codes.push({ idx, code });
+      }
+
+      /* 2. 设新主密码 */
+      const r3 = await ui.modal({
+        title: '设置新主密码',
+        content: '至少 12 位，包含字母和数字',
+        editable: true,
+        placeholderText: '新主密码',
+        confirmText: '下一步',
+      });
+      if (!r3.confirm) { return; }
+      const np = (r3.content || '').trim();
+      if (np.length < 12) {
+        ui.toast('主密码至少 12 位');
+        return;
+      }
+
+      const r4 = await ui.modal({
+        title: '确认新主密码',
+        content: '再输入一次',
+        editable: true,
+        placeholderText: '新主密码',
+        confirmText: '确认重置',
+      });
+      if (!r4.confirm) { return; }
+      if ((r4.content || '').trim() !== np) {
+        ui.toast('两次输入不一致');
+        return;
+      }
+
+      /* 3. 提交 */
+      busy = true;
+      ui.showLoading('请在设备上按 BOOT 确认');
+      try {
+        if (!pwdkey.info) {
+          await pwdkey.refreshInfo();
+        }
+        await pwdkey.recoveryRestore(codes, np);
+
+        /* 生物解锁的信封里存的是【旧 KEK】。主密码已经换了，
+         * 旧 KEK 在设备端必然过不了校验 —— 如果不在这里清掉，
+         * 用户下次按指纹会解出一个失效 KEK，然后被误导成"主密码错误"。 */
+        envelope = null;
+        await biowrap.clear().catch(() => {});
+
+        ui.hideLoading();
+        await ui.modal({
+          title: '重置成功',
+          content:
+            '数据完好无损，一条都没少。\n\n'
+            + '请用新主密码解锁。\n\n'
+            + '⚠️ 生物解锁已自动关闭（它绑定的是旧密钥），'
+            + '解锁后请到「安全设置」里重新开启。\n\n'
+            + '旧的恢复码已经全部作废，建议重新生成一套新的。',
+          showCancel: false,
+          confirmText: '去解锁',
+        });
+        pwd = '';
+        phase = 'pwd';
+        busy = false;
+        draw();
+        return;
+      } catch (e) {
+        ui.hideLoading();
+        ui.modal({
+          title: '重置失败',
+          content: e.message || '未知错误',
+          showCancel: false,
+        });
+      } finally {
+        busy = false;
       }
     }
 
@@ -223,6 +347,8 @@ module.exports = {
         draw();
         return;
       }
+
+      let envelopeOpened = false;
 
       try {
         const out = await biowrap.open(envelope, pin);
@@ -244,6 +370,20 @@ module.exports = {
           return;
         }
 
+        /* 补充验证（可选）：PIN 已通过，若开关打开则再验一次生物。
+         * 定位是"额外在场确认"，不参与密钥解密，所以用 WEAK 档（能看到 2D 人脸）。
+         * 系统会让用户自选模态，无法强制必须刷脸。 */
+        if (ui.store.get('bio_extra_verify', '') === '1') {
+          try {
+            await biowrap.verifyExtra();
+          } catch (e) {
+            ui.toast('补充验证未通过，请重试', { duration: 2500 });
+            return;
+          }
+        }
+
+        /* 信封已经解开，说明 PIN 是对的；下面这一步失败只可能是设备不认这个 KEK */
+        envelopeOpened = true;
         await pwdkey.unlockWithKek(out.kek);
         ui.vibrate();
         router.go('vault', { replace: true });
@@ -267,6 +407,25 @@ module.exports = {
           return;
         }
 
+        /* 信封解得开（PIN 正确），但设备不认这个 KEK ——
+         * 只可能是主密码被改过 / 用过恢复码重置，本地信封已过期。
+         * 这种情况绝不能显示成"主密码错误"。 */
+        if (envelopeOpened) {
+          envelope = null;
+          await biowrap.clear().catch(() => {});
+          phase = 'pwd';
+          await ui.modal({
+            title: '生物解锁已过期',
+            content:
+              '本地保存的密钥与设备不匹配。\n\n'
+              + '原因通常是主密码被修改过，或用恢复码重置过。\n\n'
+              + '请用当前主密码解锁，之后在「安全设置」里重新开启生物解锁。',
+            showCancel: false,
+          });
+          draw();
+          return;
+        }
+
         const locked = (e.code === 0x4003 || e.code === 0x4004);
         envelope = null;
         pinMsg = '';
@@ -286,7 +445,18 @@ module.exports = {
     /* ---------------- 主密码 ---------------- */
 
     async function onUnlock() {
-      if (!pwd || busy) { return; }
+      /* 以输入框的实际内容为准。
+       * 之前直接用 pwd 变量判断并控制按钮 disabled，一旦变量没跟输入框同步
+       * （重绘、输入法组合、密码管理器自动填充都可能造成），就会出现
+       * "输了密码但按钮还是灰的" 这种情况。这里改成点击时现读。 */
+      const pwdEl = document.getElementById('u-pwd');
+      if (pwdEl) { pwd = pwdEl.value; }
+
+      if (!pwd) {
+        ui.toast('请先输入主密码');
+        return;
+      }
+      if (busy) { return; }
       if (!pwdkey.connected) {
         ui.modal({ title: '未连接设备', content: '请先回到首页连接 PwdKey 设备。', showCancel: false });
         return;

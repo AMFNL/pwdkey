@@ -1,5 +1,25 @@
-﻿# Name,      Type, SubType,  Offset,    Size,     Flags
-nvs,         data, nvs,      0x9000,    0xC000,
-phy_init,    data, phy,      0x15000,   0x1000,
-factory,     app,  factory,  0x20000,   0x200000,
-audit,       data, spiffs,   0x220000,  0x20000,
+﻿# PwdKey 分区表 v2 —— 数据区与代码区物理隔离
+#
+# 设计目标：无论以后固件怎么升级、变大、甚至改成双 OTA 槽，
+# 都不可能碰到密码库，因为 vault 固定在 12 MB 处。
+#
+#  0x000000 - 0x008000   bootloader（芯片 ROM 引导后跳转）
+#  0x008000 - 0x009000   分区表本身
+#  0x009000 - 0x00D000   nvs       16 K   系统 NVS：BLE 绑定/配对信息（丢了只需重新配对）
+#  0x00D000 - 0x00E000   phy_init   4 K   射频校准
+#  0x010000 - 0xC00000   factory  11.9 M  固件本体（当前只用 565 K，留足余量）
+#  0xC00000 - 0xD00000   vault      1 M   ★密码库：主密码验证值/盐/条目/主机名
+#  0xD00000 - 0xD40000   audit    256 K   审计日志
+#  0xD40000 - 0x1000000  （未分配，2.75 M 留白，将来扩展用）
+#
+# 升级规则：
+#   正常烧固件只写 0x0 / 0x8000 / 0x10000，永远碰不到 0xC00000。
+#   若将来要改双 OTA 槽（ota_0 + ota_1），用 0x010000-0xC00000 这段即可，
+#   vault 仍原地不动，无需迁移数据。
+#
+# Name,     Type, SubType,  Offset,     Size
+nvs,        data, nvs,      0x9000,     0x4000,
+phy_init,   data, phy,      0xD000,     0x1000,
+factory,    app,  factory,  0x10000,    0xBF0000,
+vault,      data, nvs,      0xC00000,   0x100000,
+audit,      data, spiffs,   0xD00000,   0x40000,

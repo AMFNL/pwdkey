@@ -15,6 +15,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_partition.h"
+#include "app_cfg.h"          /* CFG_PART_AUDIT */
 
 static const char *TAG = "audit";
 
@@ -39,7 +40,7 @@ static bool slot_is_erased(const uint8_t *rec)
 esp_err_t audit_log_init(void)
 {
     s_part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA,
-                                      ESP_PARTITION_SUBTYPE_ANY, "audit");
+                                      ESP_PARTITION_SUBTYPE_ANY, CFG_PART_AUDIT);
     if (s_part == NULL) {
         ESP_LOGE(TAG, "audit partition not found");
         return ESP_ERR_NOT_FOUND;

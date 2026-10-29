@@ -82,15 +82,15 @@ module.exports = {
           <div class="card">
             <div class="ok-icon">✅</div>
             <div class="title" style="text-align:center">主密码已修改</div>
-            <div class="warn-box">
-              ⚠️ 设备已用新密码重新加密全部密码条目。<br>
-              下面这个<b>新恢复码</b>只显示这一次，<b>旧恢复码已立即失效</b>。
-              请立刻抄写到纸上。
+            <div class="muted" style="text-align:center;margin-top:0.8rem">
+              数据完好，一条都没少。
             </div>
-            <div class="recovery-code">${ui.esc(recoveryCode)}</div>
-            <button class="btn btn-ghost" id="cp-copy">${copied ? '已复制 ✓' : '复制恢复码'}</button>
-            ${verified ? '<div class="hint muted" style="text-align:center">已通过回抄校验 ✓</div>' : ''}
-            <button class="btn btn-primary" id="cp-finish">我已抄写，完成</button>
+            <div class="warn-box" style="margin-top:1rem">
+              如果你之前生成过恢复码，那 <b>5 份仍然有效</b> ——
+              恢复码保护的是数据密钥，跟主密码无关，所以不需要重新生成。<br><br>
+              如果还没生成过，建议现在去「安全设置 → 恢复码」生成一套。
+            </div>
+            <button class="btn btn-primary" id="cp-finish">完成</button>
           </div>
 
           <div class="card">
@@ -103,13 +103,7 @@ module.exports = {
           </div>
         `;
 
-        document.getElementById('cp-copy').onclick = async () => {
-          const ok = await ui.copyText(recoveryCode);
-          copied = ok;
-          draw();
-          ui.toast(ok ? '已复制' : '复制失败，请手动抄写');
-        };
-        document.getElementById('cp-finish').onclick = onFinish;
+        document.getElementById('cp-finish').onclick = finish;
         document.getElementById('cp-bio').onclick = async () => {
           const ok = await bioenroll.enable({ silent: false, reason: '重新设置一个 6 位 PIN' });
           if (ok) { ui.toast('已开启生物解锁'); }
@@ -219,7 +213,9 @@ module.exports = {
         });
 
         stopTimer();
-        recoveryCode = res.recoveryCode || '';
+        /* 不再沿用 v1.1 的"单个恢复码"方案。
+         * 现在恢复码是 5 份 Shamir 份额，保护的是 DEK 而不是主密码，
+         * 改密码只换 dek_wrap，这些份额依然有效，不需要重新生成。 */
         ui.store.set('pwd_changed_at', String(Date.now()));
 
         /* 旧信封里的 KEK 已经失效，主动清掉，避免下次解锁解出一个废密钥 */

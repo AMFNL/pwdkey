@@ -2,6 +2,7 @@
  * pages/vault.js - 密码库（已解锁状态下的主操作页），对应小程序 pages/vault
  */
 const { pwdkey } = require('../utils/pwdkey.js');
+const exporter = require('../utils/export.js');
 const ui = require('../ui.js');
 const router = require('../router.js');
 
@@ -31,8 +32,11 @@ module.exports = {
 
       <div class="card">
         <button class="btn btn-primary" id="v-add">＋ 添加密码</button>
-        <button class="btn btn-ghost" id="v-pair2">配对新电脑（键盘模式）</button>
+        <button class="btn btn-ghost" id="v-pair2">配对新电脑（蓝牙）</button>
+        <button class="btn btn-ghost" id="v-usb">🔌 USB 直连（插线即用）</button>
         <button class="btn btn-ghost" id="v-hosts2">🖥️ 已连接的电脑（改名 / 断开）</button>
+        <button class="btn btn-ghost" id="v-export">📦 导出加密备份</button>
+        <button class="btn btn-ghost" id="v-import">📥 导入备份</button>
       </div>
 
       <div class="hint muted">
@@ -54,6 +58,9 @@ module.exports = {
     document.getElementById('v-hosts2').onclick = () => router.go('hosts');
     document.getElementById('v-pair').onclick = onPair;
     document.getElementById('v-pair2').onclick = onPair;
+    document.getElementById('v-usb').onclick = onUsbGuide;
+    document.getElementById('v-export').onclick = onExport;
+    document.getElementById('v-import').onclick = onImport;
     document.getElementById('v-lock').onclick = onLock;
     document.getElementById('v-add').onclick = showAddDialog;
 
@@ -115,12 +122,38 @@ module.exports = {
     async function onEntryTap(id) {
       if (busy) { return; }
       const res = await ui.actionSheet({
-        itemList: ['输出到电脑（键盘输入）', '查看名称', '删除条目'],
+        itemList: ['输出到电脑（键盘输入）', '重命名', '查看名称', '删除条目'],
       });
       if (!res) { return; }
       if (res.tapIndex === 0) { onType(id); }
-      else if (res.tapIndex === 1) { onViewName(id); }
-      else if (res.tapIndex === 2) { onDelete(id); }
+      else if (res.tapIndex === 1) { onRename(id); }
+      else if (res.tapIndex === 2) { onViewName(id); }
+      else if (res.tapIndex === 3) { onDelete(id); }
+    }
+
+    async function onRename(id) {
+      const it = entries.find((x) => x.id === id);
+      const r = await ui.modal({
+        title: '重命名条目',
+        editable: true,
+        placeholderText: '例如：微信',
+        content: it && it.name ? it.name : '',
+        maxLength: 20,
+        confirmText: '保存',
+      });
+      if (!r.confirm) { return; }
+      const name = (r.content || '').trim();
+      if (!name) { ui.toast('名称不能为空'); return; }
+      ui.showLoading('保存中');
+      try {
+        await pwdkey.renameEntry(id, name);
+        ui.hideLoading();
+        ui.toast('已重命名');
+        loadEntries();
+      } catch (e) {
+        ui.hideLoading();
+        ui.toast(e.message || '重命名失败');
+      }
     }
 
     async function onViewName(id) {
@@ -208,13 +241,14 @@ module.exports = {
             startCountdown(Math.floor(timeoutMs / 1000));
           },
 
-          /* 多台电脑在线：按【名字】选目标 */
+          /* 多条通道在线：按【名字 + 通道】选目标 */
           onPickTarget: (cands) => new Promise((resolve) => {
             stopCountdown();
             const t = document.querySelector('#v-wait .dialog-title');
-            if (t) { t.textContent = '请选择输出到哪一台'; }
-            ui.actionSheet({ itemList: cands.map((c) => `输出到 ${c.name}`) })
-              .then((r) => resolve(r ? cands[r.tapIndex].addr : null));
+            if (t) { t.textContent = '请选择输出通道'; }
+            ui.actionSheet({
+              itemList: cands.map((c) => `输出到 ${c.name}${c.isUsb ? '（USB 有线）' : '（蓝牙）'}`),
+            }).then((r) => resolve(r ? cands[r.tapIndex].addr : null));
           }),
         });
 
@@ -343,6 +377,213 @@ module.exports = {
         busy = false;
         if (overlay && overlay.parentNode) { overlay.remove(); }
       }
+    }
+
+    /* ---------------- USB 直连（有线）说明 ----------------
+     * 有线不需要配对：插上数据线，设备就是一个标准 USB 键盘。
+     * 这里只负责告诉用户怎么用、以及当前是否已连上。
+     */
+
+    async function onUsbGuide() {
+      let online = false;
+      let name = 'USB 直连';
+      try {
+        const list = await pwdkey.listHosts();
+        const u = list.find((h) => h.isUsb);
+        if (u) { online = u.online; name = u.name; }
+      } catch (e) { /* 查不到就按"未连接"显示，不打断引导 */ }
+
+      await ui.modal({
+        title: online ? `${name} 已连接` : 'USB 直连（有线）',
+        content: online
+          ? '设备现在通过数据线连着电脑，可以直接输出密码，不需要配对。若同时有多条通道在线，输出前会让你选择走哪条。'
+          : '把数据线插到电脑上，设备会立刻被识别为标准键盘，免驱、免配对。注意要用标着 USB/OTG 的那个口（不是充电口），而且必须是能传数据的线，纯充电线不行。',
+        showCancel: false,
+        confirmText: '知道了',
+      });
+    }
+
+    /* ---------------- 加密导出 ---------------- */
+
+    async function onExport() {
+      if (busy) { return; }
+      if (!pwdkey.isUnlocked()) {
+        ui.toast('会话已失效，请重新解锁');
+        return;
+      }
+
+      const r = await ui.modal({
+        title: '导出加密备份',
+        content:
+          '请输入主密码。备份文件用这个密码加密，只有它能解开。\n\n'
+          + '整个过程在设备内完成加密，密码明文不会出现在蓝牙传输里。',
+        editable: true,
+        placeholderText: '主密码（至少 12 位，含字母和数字）',
+        confirmText: '开始导出',
+      });
+      if (!r.confirm) { return; }
+      const pwd = (r.content || '').trim();
+      if (!pwd) { return; }
+
+      busy = true;
+      const overlay = showWaitingOverlay('📦', '请在设备上短按 BOOT 确认');
+      const cdEl = document.getElementById('v-cd');
+      if (cdEl) { cdEl.textContent = '0%'; }
+
+      try {
+        /* 收数据 + 换锁（这一步会等 BOOT 确认，浮层上有进度百分比） */
+        const content = await pwdkey.exportVault(pwd, {
+          onProgress: (done, total) => {
+            const el = document.getElementById('v-cd');
+            if (el) { el.textContent = Math.round((done / total) * 100) + '%'; }
+          },
+        });
+
+        /* 数据已经拿到了，立刻关掉"等待确认"浮层 ——
+         * 后面的保存/分享是另一件事，不能让它卡住这个浮层。 */
+        closeWait();
+
+        ui.showLoading('保存中');
+        let name;
+        try {
+          name = await exporter.saveAndShare(content);
+        } finally {
+          ui.hideLoading();
+        }
+
+        await ui.modal({
+          title: '导出完成',
+          content:
+            `${name}\n\n`
+            + '请把这个文件存到手机之外（电脑、U 盘都行）。\n'
+            + '文件 + 你的主密码 = 全部密码，请当作钥匙保管。\n\n'
+            + '设备在 30 分钟内不会允许再次导出。',
+          showCancel: false,
+          confirmText: '知道了',
+        });
+      } catch (e) {
+        closeWait();
+        ui.hideLoading();
+        ui.modal({
+          title: '导出失败',
+          content: e.message || '未知错误',
+          showCancel: false,
+        });
+      } finally {
+        busy = false;
+        if (overlay && overlay.parentNode) { overlay.remove(); }
+      }
+    }
+
+    /* ---------------- 导入备份 ---------------- */
+
+    async function onImport() {
+      if (busy) { return; }
+      if (!pwdkey.isUnlocked()) {
+        ui.toast('会话已失效，请重新解锁');
+        return;
+      }
+
+      /* 走原生选择器：Capacitor 的 WebView 没实现 onShowFileChooser，
+         H5 的 input[type=file] 点了没反应，所以改用 VaultFile 插件。 */
+      const cap = typeof window !== 'undefined' ? window.Capacitor : null;
+      const vf = cap && cap.Plugins && cap.Plugins.VaultFile;
+      if (!vf) {
+        ui.modal({
+          title: '无法导入',
+          content: '当前环境不支持文件选择（请确认安装的是最新版 App）。',
+          showCancel: false,
+        });
+        return;
+      }
+
+      let picked;
+      try {
+        picked = await vf.pickAndRead();
+      } catch (e) {
+        if (e && (e.code === 'CANCELLED' || e.code === 'PICKER_CANCELLED')) {
+          return;
+        }
+        ui.modal({
+          title: '无法打开文件',
+          content: (e && e.message) || '文件选择器启动失败',
+          showCancel: false,
+        });
+        return;
+      }
+
+      const text = (picked && picked.content) || '';
+      const fileName = (picked && picked.name) || 'backup.amfnl';
+      if (!text) {
+        ui.modal({ title: '导入', content: '文件是空的，或不是文本格式。', showCancel: false });
+        return;
+      }
+
+      const r = await ui.modal({
+        title: '导入备份',
+        content: `文件：${fileName}\n\n请输入导出时使用的主密码。`,
+        editable: true,
+        placeholderText: '主密码',
+        confirmText: '继续',
+      });
+      if (!r.confirm) { return; }
+      const pwd = (r.content || '').trim();
+      if (!pwd) { return; }
+
+      ui.showLoading('解密中');
+      let parsed;
+      try {
+        parsed = await exporter.openPackage(text, pwd);
+      } catch (e) {
+        ui.hideLoading();
+        ui.modal({
+          title: '无法解密',
+          content: e.message || '密码错误或文件已损坏',
+          showCancel: false,
+        });
+        return;
+      }
+      ui.hideLoading();
+
+      if (!parsed.entries.length) {
+        ui.modal({ title: '导入', content: '备份里没有条目。', showCancel: false });
+        return;
+      }
+
+      const ok = await ui.modal({
+        title: '确认导入',
+        content:
+          `文件里有 ${parsed.entries.length} 条密码`
+          + (parsed.exportedAt ? `（导出于 ${parsed.exportedAt.slice(0, 10)}）` : '')
+          + '。\n\n导入会【新增】到现有条目，不会覆盖或删除已有数据。',
+        confirmText: '导入',
+      });
+      if (!ok.confirm) { return; }
+
+      ui.showLoading('写入中');
+      let done = 0;
+      const failed = [];
+      for (const e of parsed.entries) {
+        try {
+          await pwdkey.addEntry(e.secret, e.name || '');
+          done++;
+        } catch (err) {
+          failed.push((e.name || '(无名称)') + '：' + (err.message || '失败'));
+        }
+      }
+      ui.hideLoading();
+
+      if (failed.length) {
+        await ui.modal({
+          title: `导入完成 ${done}/${parsed.entries.length}`,
+          content: '以下条目失败：\n' + failed.slice(0, 5).join('\n')
+                   + (failed.length > 5 ? `\n…另有 ${failed.length - 5} 条` : ''),
+          showCancel: false,
+        });
+      } else {
+        ui.toast(`已导入 ${done} 条`, { duration: 2500 });
+      }
+      loadEntries();
     }
 
     /* ---------------- 锁定 ---------------- */

@@ -76,3 +76,32 @@ esp_err_t store_recovery_reset(const uint8_t new_salt[16], uint32_t new_iter,
 
 /* --- device identity (sys namespace) --- */
 esp_err_t sec_store_get_dev_name(char *buf, size_t cap);
+
+/* --- encrypted export (明文永不出设备) ---
+ * store_export_build: 用一次性随机密钥加密全部条目，再用 KEK 包裹该密钥。
+ *   out_wrapped     60 字节 = wrap_nonce(12) + ct(32) + tag(16)
+ *   out_data_nonce  12 字节，data 的 GCM nonce
+ *   out_len         密文总长（末尾 16 字节是 GCM tag，与 WebCrypto 格式一致）
+ * 之后用 store_export_chunk 按偏移取块，传完必须调用 store_export_finish 擦除。 */
+esp_err_t store_export_build(const uint8_t kek[32],
+                             uint8_t out_wrapped[60],
+                             uint8_t out_data_nonce[12],
+                             size_t *out_len);
+esp_err_t store_export_chunk(uint16_t offset, uint8_t *out, uint16_t cap, uint16_t *out_len);
+void      store_export_finish(void);
+bool      store_export_active(void);
+
+/* --- 导出冷却标记（防重启绕过限速）--- */
+esp_err_t store_export_cooldown_set(bool active);
+bool      store_export_cooldown_get(void);
+
+/* --- DEK（数据加密密钥）--- */
+bool      store_use_dek(void);
+void      store_dek_load_flag(void);
+esp_err_t store_migrate_to_dek(const uint8_t kek[32]);
+
+/* --- 恢复码（3-of-5）--- */
+esp_err_t store_recovery_setup(const uint8_t kek[32], uint8_t *out_shares);
+esp_err_t store_recovery_restore(const uint8_t *xs, const uint8_t *shares, uint8_t k,
+                                 const uint8_t new_kek[32]);
+bool      store_recovery_ready(void);

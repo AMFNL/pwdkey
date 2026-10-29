@@ -7,12 +7,14 @@
     "build:web": "esbuild www/src/main.js --bundle --outfile=www/js/app.bundle.js --format=iife --target=es2018 --legal-comments=none",
     "sync": "npm run build:web && cap sync android",
     "apk": "npm run sync && cd android && gradlew.bat assembleRelease",
-    "test": "node tests/test_crypto_equiv.js && node tests/test_change_pwd.js && node tests/test_dom_smoke.js && node tests/verify_bundle.js"
+    "test": "node tests/test_crypto_equiv.js && node tests/test_change_pwd.js && node tests/test_dom_smoke.js && node tests/verify_bundle.js && node tests/test_export.js"
   },
   "dependencies": {
     "@capacitor-community/bluetooth-le": "^6.1.0",
     "@capacitor/android": "^6.2.2",
-    "@capacitor/core": "^6.2.2"
+    "@capacitor/core": "^6.2.2",
+    "@capacitor/filesystem": "^6.0.4",
+    "@capacitor/share": "^6.0.4"
   },
   "devDependencies": {
     "@capacitor/cli": "^6.2.2",

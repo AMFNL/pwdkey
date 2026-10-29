@@ -18,6 +18,7 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "app_cfg.h"          /* VAULT_NVS_OPEN：用户数据必须放 vault 分区 */
 #include "esp_timer.h"
 #include "nvs.h"
 #include "nvs_flash.h"
@@ -41,6 +42,11 @@ void host_reg_default_name(const uint8_t addr[6], char *out, size_t cap)
         if (cap > 0) {
             out[0] = '\0';
         }
+        return;
+    }
+    /* USB 通道（全 0 地址）：固定名字，不参与 MAC 派生 */
+    if (HOST_ADDR_IS_USB(addr)) {
+        snprintf(out, cap, "\x55\x53\x42 \xE7\x9B\xB4\xE8\xBF\x9E");  /* "USB 直连" */
         return;
     }
     /* "电脑 " (6 bytes) + 4 hex chars + NUL  -> 11 bytes, fits in 16 */
@@ -121,7 +127,7 @@ esp_err_t host_reg_init(void)
 {
     memset(s_rec, 0, sizeof(s_rec));
     s_cnt = 0;
-    esp_err_t err = nvs_open(NS_HOST, NVS_READWRITE, &s_h);
+    esp_err_t err = VAULT_NVS_OPEN(NS_HOST, NVS_READWRITE, &s_h);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "nvs_open failed: %s", esp_err_to_name(err));
         return err;
@@ -136,6 +142,18 @@ esp_err_t host_reg_init(void)
             }
         }
     }
+    /* 确保 USB 通道记录存在（地址全 0）。
+     * USB HID 协议里设备无法得知主机身份，所以有线永远只有这一条记录，
+     * 换电脑插也是它；用户给它改的名字会保留。 */
+    {
+        static const uint8_t usb_addr[6] = { 0 };
+        host_rec_t *ur = host_reg_upsert(usb_addr, 0);
+        if (ur != NULL && !(ur->flags & HOST_FLAG_IS_USB)) {
+            ur->flags |= HOST_FLAG_IS_USB;
+            (void)flush();
+        }
+    }
+
     ESP_LOGI(TAG, "host registry ready, %u known hosts", (unsigned)s_cnt);
     return ESP_OK;
 }

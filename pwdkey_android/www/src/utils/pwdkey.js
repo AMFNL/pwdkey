@@ -20,6 +20,7 @@
 const ble = require('./ble.js');
 const proto = require('../libs/proto.js');
 const crypto = require('./crypto.js');
+const exp = require('./export.js');
 
 const { OP, TAG, tlv, buildFrames } = proto;
 
@@ -28,6 +29,54 @@ class PwdKeyError extends Error {
     super(message || proto.errText(code));
     this.code = code;
   }
+}
+
+/* ---------------- 恢复码的 Base32 编解码 ----------------
+ * 字母表与固件 gen_recovery_code 完全一致：去掉易混的 I / O / 0 / 1。
+ * 16 字节 → 26 字符（128 bit = 25.6 个 5 位组，向上取整，末位补 0）。
+ */
+const B32_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+function b32Encode(bytes) {
+  let acc = 0;
+  let bits = 0;
+  let out = '';
+  for (let i = 0; i < bytes.length; i++) {
+    acc = (acc << 8) | bytes[i];
+    bits += 8;
+    while (bits >= 5) {
+      bits -= 5;
+      out += B32_ALPHABET[(acc >> bits) & 0x1F];
+    }
+  }
+  if (bits > 0) {
+    out += B32_ALPHABET[(acc << (5 - bits)) & 0x1F];
+  }
+  return out;
+}
+
+function b32Decode(str, byteLen) {
+  const s = String(str || '').toUpperCase().replace(/[^A-Z2-9]/g, '');
+  const out = new Uint8Array(byteLen);
+  let acc = 0;
+  let bits = 0;
+  let oi = 0;
+  for (let i = 0; i < s.length && oi < byteLen; i++) {
+    const v = B32_ALPHABET.indexOf(s[i]);
+    if (v < 0) {
+      throw new Error('恢复码里有非法字符：' + s[i]);
+    }
+    acc = (acc << 5) | v;
+    bits += 5;
+    if (bits >= 8) {
+      bits -= 8;
+      out[oi++] = (acc >> bits) & 0xFF;
+    }
+  }
+  if (oi !== byteLen) {
+    throw new Error(`恢复码长度不对（应为 26 个字符，实际有效 ${s.length} 个）`);
+  }
+  return out;
 }
 
 class PwdKey {
@@ -143,11 +192,21 @@ class PwdKey {
     if (!proto.hasResult(frame.tlvs)) { return frame; }
     const rc = proto.resultCode(frame.tlvs);
     if (rc !== 0) {
-      // 附带锁定剩余秒数
-      const lv = proto.tlvLast(frame.tlvs, TAG.LOCK_SECONDS);
       let msg = proto.errText(rc);
-      if ((rc === 0x4003) && lv) {
-        msg += `（剩余 ${proto.readU32le(lv, 0)} 秒）`;
+      /* 两种"等一会儿"的提示，固件用的 TLV 不同，长度也不同：
+       *   0x4003 临时锁定 → T_LOCK_SECONDS(0x0C)，u32
+       *   0x0002 设备忙   → T_ERR_DETAIL(0x16)，u16（导出 30 分钟限速走这里）
+       * 之前只处理了前者，所以导出被限速时只显示"设备正忙"，看不出要等多久。 */
+      if (rc === 0x4003) {
+        const lv = proto.tlvLast(frame.tlvs, TAG.LOCK_SECONDS);
+        if (lv) {
+          msg += `（剩余 ${proto.readU32le(lv, 0)} 秒）`;
+        }
+      } else if (rc === 0x0002) {
+        const dv = proto.tlvLast(frame.tlvs, TAG.ERR_DETAIL);
+        if (dv && dv.length >= 2) {
+          msg += `（还需等待 ${proto.readU16le(dv, 0)} 秒）`;
+        }
       }
       throw new PwdKeyError(rc, msg);
     }
@@ -405,6 +464,156 @@ class PwdKey {
     return id ? proto.bytesToAscii(id) : '';
   }
 
+  /**
+   * 只改条目名称，密码不动。
+   * 固件 PWD_UPDATE 的 has_name / has_sec 是独立判断的，只带 NAME
+   * 就是纯改名，不会重新加密条目内容。
+   */
+  async renameEntry(id, name) {
+    this._requireUnlocked();
+    const nm = String(name || '').trim();
+    if (!nm) { throw new PwdKeyError(0x1003, '名称不能为空'); }
+    const tlvs = proto.concatBytes(
+      tlv(TAG.ENTRY_ID, proto.asciiToBytes(id)),
+      tlv(TAG.NAME, crypto.utf8ToBytes(nm)));
+    await this._send(OP.PWD_UPDATE, tlvs);
+    const f = await this._waitFrame(OP.PWD_UPDATE, { timeout: 10000 });
+    this._checkResult(f);
+    await this.refreshInfo();
+  }
+
+  /**
+   * 加密导出：**设备内加密**，BLE 上只跑密文，App 全程不接触条目明文。
+   *
+   *   1. BEGIN  → 设备生成导出包（需在设备上按 BOOT 确认），返回 wrapped/nonce/总长
+   *   2. CHUNK  → 分块取密文
+   *   3. 换锁   → 用 KEK 解出 K_export，再用主密码派生的密钥重新包裹
+   *   4. 存文件 → 写缓存 + 系统分享 + 删除缓存副本
+   *
+   * @param {string} masterPwd
+   * @param {{onProgress?:(done:number,total:number)=>void}} cb
+   * @returns {Promise<string>} 备份文件内容（保存由调用方负责）
+   */
+  async exportVault(masterPwd, cb) {
+    this._requireUnlocked();
+    const onProgress = cb && cb.onProgress;
+    if (!this.kek) {
+      throw new PwdKeyError(0x4002, '会话已失效，请重新解锁');
+    }
+
+    /* 1. BEGIN —— 这一步会触发设备上的 BOOT 确认窗口 */
+    await this._send(OP.PWD_EXPORT_BEGIN, proto.concatBytes());
+    const head = await this._waitFrame(OP.PWD_EXPORT_BEGIN, { timeout: 45000 });
+    this._checkResult(head);
+
+    const wrapped = proto.tlvLast(head.tlvs, TAG.EXPORT_WRAPPED);
+    const dnonce = proto.tlvLast(head.tlvs, TAG.EXPORT_NONCE);
+    const totalB = proto.tlvLast(head.tlvs, TAG.EXPORT_TOTAL);
+    if (!wrapped || wrapped.length !== 60 || !dnonce || dnonce.length !== 12 || !totalB) {
+      throw new PwdKeyError(0x0001, '设备返回的导出头不完整');
+    }
+    const total = proto.readU32le(totalB, 0);
+    if (!total || total > 65536) {
+      throw new PwdKeyError(0x0001, '导出长度异常');
+    }
+
+    /* 2. 分块取密文 */
+    const parts = [];
+    let offset = 0;
+    while (offset < total) {
+      await this._send(OP.PWD_EXPORT_CHUNK, tlv(TAG.EXPORT_OFFSET, proto.u32le(offset)));
+      const f = await this._waitFrame(OP.PWD_EXPORT_CHUNK, { timeout: 10000 });
+      this._checkResult(f);
+      const blk = proto.tlvLast(f.tlvs, TAG.EXPORT_DATA);
+      if (!blk || !blk.length) {
+        throw new PwdKeyError(0x0001, '导出中断（设备无更多数据）');
+      }
+      parts.push(blk);
+      offset += blk.length;
+      if (onProgress) { onProgress(offset, total); }
+      if (parts.length > 256) { break; }
+    }
+    if (offset < total) {
+      throw new PwdKeyError(0x0001, `导出不完整（${offset}/${total} 字节）`);
+    }
+    const cipher = proto.concatBytes.apply(null, parts);
+
+    /* 3. 换锁：只经手 32 字节的 K_export，不碰条目明文 */
+    const content = await exp.fromDevice(wrapped, dnonce, cipher, this.kek, masterPwd);
+
+    /* 4. 只返回内容，保存/分享交给 UI 层。
+     *    原因：Share.share() 在某些 ROM 上可能长时间不回调，
+     *    如果把它放在这里，调用方的"等待确认"浮层会一直关不掉。 */
+    return content;
+  }
+
+  /* ---------------- 恢复码（3-of-5） ---------------- */
+
+  /**
+   * 生成 5 份恢复码。**首次调用会触发 DEK 迁移**（把所有条目重新加密一次）。
+   * 需要在设备上按 BOOT 确认。
+   *
+   * @returns {Promise<Array<{idx:number, code:string}>>} 按序号排好的 5 份
+   */
+  async recoverySetup() {
+    this._requireUnlocked();
+    if (!this.kek) {
+      throw new PwdKeyError(0x4002, '会话已失效，请重新解锁');
+    }
+
+    await this._send(OP.RECOVERY_SETUP, proto.concatBytes());
+    const f = await this._waitFrame(OP.RECOVERY_SETUP, { timeout: 60000 });
+    this._checkResult(f);
+
+    const idxs = f.tlvs[TAG.REC_IDX] || [];
+    const datas = f.tlvs[TAG.REC_DATA] || [];
+    const out = [];
+    for (let i = 0; i < idxs.length && i < datas.length; i++) {
+      out.push({ idx: idxs[i][0], code: b32Encode(datas[i]) });
+    }
+    if (out.length !== 5) {
+      throw new PwdKeyError(0x0001, '设备返回的恢复码数量不对：' + out.length);
+    }
+    return out.sort((a, b) => a.idx - b.idx);
+  }
+
+  /**
+   * 用 3 份恢复码重设主密码。**不需要旧主密码**，但需要在设备上按 BOOT。
+   * 数据不会被清除 —— 设备只是用新 KEK 重新包裹 DEK。
+   *
+   * @param {Array<{idx:number, code:string}>} codes
+   * @param {string} newPwd 新主密码
+   */
+  async recoveryRestore(codes, newPwd) {
+    if (!this.info || !this.info.salt || !this.info.iter) {
+      throw new PwdKeyError(0x0001, '请先连接设备并读取设备信息');
+    }
+    if (!Array.isArray(codes) || codes.length < 3) {
+      throw new PwdKeyError(0x0001, '至少需要 3 份恢复码');
+    }
+
+    const parts = [];
+    for (const c of codes) {
+      const data = b32Decode(c.code, 16);
+      parts.push(tlv(TAG.REC_IDX, new Uint8Array([c.idx & 0xFF])));
+      parts.push(tlv(TAG.REC_DATA, data));
+    }
+
+    /* 新主密码 → 新 KEK（salt/iter 沿用设备当前值） */
+    const pwdBytes = crypto.utf8ToBytes(String(newPwd));
+    const kek = await crypto.deriveKekAsync(pwdBytes, this.info.salt, this.info.iter);
+    parts.push(tlv(TAG.KEK_BLOB, kek));
+
+    try {
+      await this._send(OP.RECOVERY_RESTORE, proto.concatBytes.apply(null, parts));
+      const f = await this._waitFrame(OP.RECOVERY_RESTORE, { timeout: 90000 });
+      this._checkResult(f);
+    } finally {
+      if (kek && kek.fill) { kek.fill(0); }
+    }
+    return true;
+  }
+
   async deleteEntry(id) {
     this._requireUnlocked();
     await this._send(OP.PWD_DELETE, tlv(TAG.ENTRY_ID, proto.asciiToBytes(id)));
@@ -471,6 +680,7 @@ class PwdKey {
           online: !!(fl & proto.HOST_FLAG.ONLINE),
           hid: !!(fl & proto.HOST_FLAG.HID_NOW),
           userNamed: !!(fl & proto.HOST_FLAG.USER_NAMED),
+          isUsb: !!(fl & proto.HOST_FLAG.IS_USB),
         });
       }
       if (addrs.length === 0 || out.length >= total) { break; }
@@ -530,15 +740,21 @@ class PwdKey {
       if (proto.hasResult(half.tlvs)) {
         const rc = proto.resultCode(half.tlvs);
         if (rc === 0x3002 && onPickTarget && !pickedOnce) {
-          /* 设备回报"目标不明确"，并附上候选 MAC（连同它已知的名称） */
+          /* 设备回报"目标不明确"，并附上候选 MAC（连同它已知的名称与通道标记） */
           const addrs = half.tlvs[TAG.HOST_ADDR] || [];
           const names = half.tlvs[TAG.HOST_NAME] || [];
+          const hflags = half.tlvs[TAG.HOST_FLAGS] || [];
           if (!addrs.length) { this._checkResult(half); }
-          const cands = addrs.map((a, i) => ({
-            addr: a,
-            mac: PwdKey.macText(a),
-            name: names[i] ? utf8Decode(names[i]) : PwdKey.macText(a),
-          }));
+          const cands = addrs.map((a, i) => {
+            const fl = hflags[i] ? hflags[i][0] : 0;
+            return {
+              addr: a,
+              mac: PwdKey.macText(a),
+              name: names[i] ? utf8Decode(names[i]) : PwdKey.macText(a),
+              isUsb: !!(fl & proto.HOST_FLAG.IS_USB),
+              online: !!(fl & proto.HOST_FLAG.ONLINE),
+            };
+          });
           const chosen = await onPickTarget(cands);
           if (!chosen) {
             throw new PwdKeyError(0x3004, '已取消选择目标');

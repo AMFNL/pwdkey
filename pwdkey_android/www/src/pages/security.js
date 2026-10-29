@@ -32,7 +32,27 @@ module.exports = {
         <div class="title">生物解锁</div>
         <div class="muted" id="sec-bio-desc">检测中…</div>
         <div class="hint muted" id="sec-bio-hint" style="margin-top:0.6rem"></div>
+        <label class="bio-row">
+          <span>PIN 之后再验一次生物</span>
+          <input type="checkbox" id="sec-bio-extra">
+        </label>
+        <div class="hint muted" style="margin-top:0.2rem">
+          开启后，输入 PIN 正确还需再验证一次指纹或面容。
+          这一道不参与密钥解密，只是额外的在场确认。
+          系统弹窗允许自选模态，所以无法强制只用人脸 —— 但任何一道都能加厚门槛。
+        </div>
         <button class="btn btn-primary" id="sec-bio-btn" disabled>检测中…</button>
+        <button class="btn btn-ghost" id="sec-bio-cap">检测生物识别能力</button>
+      </div>
+
+      <div class="card">
+        <div class="title">恢复码</div>
+        <div class="muted">忘记主密码时用来救回数据，不会清空任何条目</div>
+        <div class="hint muted" style="margin-top:0.6rem">
+          生成 5 份，任意 3 份可恢复。请分开保管 ——
+          任意 3 份凑在一起就等于全部密码，这也是为什么要 5 份而不是 1 份。
+        </div>
+        <button class="btn btn-ghost" id="sec-rec-btn">生成恢复码</button>
       </div>
 
       <div class="card">
@@ -73,6 +93,104 @@ module.exports = {
     let bio = { supported: false, available: false, hasEnroll: false, reasonText: '' };
 
     pwdDesc.textContent = '上次修改：' + fmtDate(parseInt(ui.store.get('pwd_changed_at', '0'), 10));
+
+    /* PIN 之后的补充生物验证（可选开关） */
+    const extraEl = document.getElementById('sec-bio-extra');
+    extraEl.checked = ui.store.get('bio_extra_verify', '') === '1';
+    extraEl.onchange = () => {
+      ui.store.set('bio_extra_verify', extraEl.checked ? '1' : '');
+      ui.toast(
+        extraEl.checked ? '已开启：PIN 正确后还需再验一次生物' : '已关闭补充验证',
+        { duration: 2500 }
+      );
+    };
+
+    /* 生物识别能力探测：用于解释"手机有人脸，为什么只能用指纹" */
+    document.getElementById('sec-bio-cap').onclick = async () => {
+      ui.showLoading('检测中');
+      const c = await biowrap.capabilities();
+      ui.hideLoading();
+
+      if (!c.supported) {
+        ui.modal({ title: '无法检测', content: '当前环境不支持生物识别能力查询。', showCancel: false });
+        return;
+      }
+      if (c.error) {
+        ui.modal({ title: '检测失败', content: c.error, showCancel: false });
+        return;
+      }
+
+      const yn = (b) => (b ? '有' : '无');
+      const lines = [
+        `指纹硬件：${yn(c.fingerprintHw)}　人脸硬件：${yn(c.faceHw)}`,
+        `强生物识别：${c.strongText}`,
+        `弱生物识别：${c.weakText}`,
+        '当前策略：只接受强生物识别',
+      ];
+
+      let tip = '';
+      if (c.faceHw && c.strong !== 0 && c.weak === 0) {
+        tip = '\n\n你手机有人脸，但系统把它归为"弱"。本 App 的生物密钥绑定在"强"档上，所以现在只认指纹。'
+            + '若放开到"弱"，照片有机会骗过人脸，需要另做取舍。';
+      } else if (c.strong === 0) {
+        tip = '\n\n强生物识别可用，指纹或强面容都能用。';
+      } else if (c.weak !== 0) {
+        tip = '\n\n系统里还没有录入任何生物特征。';
+      }
+
+      ui.modal({
+        title: '生物识别能力',
+        content: lines.join('\n') + tip,
+        showCancel: false,
+        confirmText: '知道了',
+      });
+    };
+
+    /* 生成恢复码：逐份展示，强制用户逐份过一遍 */
+    document.getElementById('sec-rec-btn').onclick = async () => {
+      if (!pwdkey.isUnlocked()) {
+        ui.toast('会话已失效，请重新解锁');
+        return;
+      }
+
+      const r = await ui.modal({
+        title: '生成恢复码',
+        content:
+          '这一步会把所有密码重新加密一次（迁移到新的密钥结构）。\n\n'
+          + '迁移设计成可中断恢复，但为保险起见，建议先到密码库导出一份备份。\n\n'
+          + '接下来需要在设备上按一下 BOOT 键确认。',
+        confirmText: '我已备份，继续',
+      });
+      if (!r.confirm) { return; }
+
+      ui.showLoading('请在设备上按 BOOT 确认');
+      let shares;
+      try {
+        shares = await pwdkey.recoverySetup();
+        ui.hideLoading();
+      } catch (e) {
+        ui.hideLoading();
+        ui.modal({
+          title: '生成失败',
+          content: e.message || '未知错误',
+          showCancel: false,
+        });
+        return;
+      }
+
+      for (let i = 0; i < shares.length; i++) {
+        const s = shares[i];
+        const rr = await ui.modal({
+          title: `第 ${s.idx} 份 / 共 5 份`,
+          content: `${s.code}\n\n请抄写或截图保存。任意 3 份即可恢复。`,
+          showCancel: i > 0,
+          cancelText: '稍后再说',
+          confirmText: i === shares.length - 1 ? '我已全部抄好' : '下一份',
+        });
+        if (!rr.confirm) { break; }
+      }
+      ui.toast('恢复码已生成', { duration: 2500 });
+    };
 
     document.getElementById('sec-pwd-btn').onclick = () => {
       if (!pwdkey.isUnlocked()) {

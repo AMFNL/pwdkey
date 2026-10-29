@@ -88,7 +88,7 @@ void sec_session_init(void)
     if (s_mtx == NULL) {
         s_mtx = xSemaphoreCreateMutex();
     }
-    esp_err_t err = nvs_open(NS_SYS, NVS_READWRITE, &s_h_sys);
+    esp_err_t err = VAULT_NVS_OPEN(NS_SYS, NVS_READWRITE, &s_h_sys);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "nvs_open sys failed: %s", esp_err_to_name(err));
         return;

@@ -65,11 +65,15 @@ CONFIG_MBEDTLS_HKDF_C=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 
-# --- Console: USB-Serial-JTAG as primary (single-cable flash + log) ---
-# Matches the dev-board wiring (native USB port). Change back to
-# CONFIG_ESP_CONSOLE_UART_DEFAULT=y if you use the board's UART-USB port.
-CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+# --- Console ---
+# 必须走 UART（板载 CH340 那个口），把原生 USB 口完整让给 USB HID（TinyUSB）。
+# USB-Serial-JTAG 与 USB OTG 共用 GPIO19/20，运行期互斥，不能同时开。
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
 CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+CONFIG_ESP_CONSOLE_UART_NUM=0
+
+# --- USB HID keyboard (TinyUSB) ---
+CONFIG_TINYUSB_HID_COUNT=1
 
 # --- Main task stack ---
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=3584

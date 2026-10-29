@@ -127,6 +127,59 @@ async function status() {
 }
 
 /**
+ * 生物识别能力探测：设备有什么硬件、系统认可到哪一档。
+ * 纯只读，不改变认证策略（App 目前仍只用 BIOMETRIC_STRONG）。
+ *
+ * 为什么需要它：Android 上绝大多数 2D 人脸被归为 WEAK，
+ * 而本 App 的 K_bio 绑定的是 STRONG，所以"有人脸但用不了"。
+ */
+async function capabilities() {
+  const p = plugin();
+  if (!p || typeof p.capabilities !== 'function') {
+    return { supported: false, policy: 'STRONG' };
+  }
+  try {
+    const r = await p.capabilities();
+    return {
+      supported: true,
+      sdkInt: r.sdkInt,
+      fingerprintHw: !!r.fingerprintHw,
+      faceHw: !!r.faceHw,
+      irisHw: !!r.irisHw,
+      strong: r.strong,
+      strongText: r.strongText || '',
+      weak: r.weak,
+      weakText: r.weakText || '',
+      policy: r.policy || 'STRONG',
+    };
+  } catch (e) {
+    return { supported: true, error: (e && e.message) || '探测失败', policy: 'STRONG' };
+  }
+}
+
+/**
+ * 补充生物验证：**不涉及密钥**，PIN 正确后再验一次。
+ *
+ * 用 BIOMETRIC_WEAK 是为了让 2D 人脸也能出现；但因为 WEAK 是 STRONG 的超集，
+ * 系统会让用户自选模态，**无法强制"必须刷脸"**。
+ * 主保护仍是「STRONG 生物 + PIN」，这一道只是额外的在场确认。
+ */
+async function verifyExtra() {
+  const p = plugin();
+  if (!p || typeof p.verifyExtra !== 'function') {
+    return { ok: true, skipped: true };
+  }
+  try {
+    await p.verifyExtra();
+    return { ok: true };
+  } catch (e) {
+    const code = (e && e.code) || 'BIO_EXTRA_FAIL';
+    const err = new BioError(code, (e && e.message) || '补充验证未通过');
+    throw err;
+  }
+}
+
+/**
  * 开启生物解锁：把当前 KEK 用 PIN 包一层，再交给原生用生物密钥包外层。
  * 会弹一次系统生物认证框。
  *
@@ -206,6 +259,8 @@ module.exports = {
   available,
   isPrompting,
   status,
+  capabilities,
+  verifyExtra,
   enroll,
   unwrap,
   open,

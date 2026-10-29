@@ -2,6 +2,7 @@ package com.pwdkey.app;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.os.Build;
 import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyPermanentlyInvalidatedException;
@@ -70,6 +71,10 @@ public class BiometricWrapPlugin extends Plugin {
 
     /* ---------------- 常量 ---------------- */
 
+    /* 认证规格只能是 AUTH_BIOMETRIC_STRONG：
+     * Android KeyStore 的 KeyProperties 里压根没有 AUTH_BIOMETRIC_WEAK
+     * （已用 javap 核对 android-34）。平台规定 Class 2 弱生物不得用于保护密钥，
+     * 所以 2D 人脸在架构上无法作为解锁因子 —— 这不是实现取舍，是系统限制。 */
     private static final String KEY_ALIAS = "pwdkey_bio_wrap_v1";
     private static final String PREFS = "pwdkey_bio";
     private static final String P_IV = "wrap_iv";
@@ -128,6 +133,20 @@ public class BiometricWrapPlugin extends Plugin {
         }
     }
 
+    /** 能力探测用的简短文案（比 reasonText 更中性，强/弱两档通用） */
+    private static String capText(int code) {
+        switch (code) {
+            case BiometricManager.BIOMETRIC_SUCCESS: return "可用";
+            case BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE: return "无硬件";
+            case BiometricManager.BIOMETRIC_ERROR_HW_UNAVAILABLE: return "硬件暂不可用";
+            case BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED: return "未录入";
+            case BiometricManager.BIOMETRIC_ERROR_SECURITY_UPDATE_REQUIRED: return "缺安全更新";
+            case BiometricManager.BIOMETRIC_ERROR_UNSUPPORTED: return "系统不支持";
+            case BiometricManager.BIOMETRIC_STATUS_UNKNOWN: return "状态未知";
+            default: return "未知(" + code + ")";
+        }
+    }
+
     /** 生物认证错误码 -> 机器可读字符串 */
     private static String mapAuthError(int code) {
         switch (code) {
@@ -166,7 +185,9 @@ public class BiometricWrapPlugin extends Plugin {
                 .setInvalidatedByBiometricEnrollment(true);
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            /* timeout=0 表示"每次使用都要认证"，且只允许强生物（Class 3） */
+            /* timeout=0 表示"每次使用都要认证"。
+             * 只能写 STRONG：KeyProperties 没有 AUTH_BIOMETRIC_WEAK，
+             * 平台规定弱生物不得保护密钥。 */
             b.setUserAuthenticationParameters(0, KeyProperties.AUTH_BIOMETRIC_STRONG);
         } else {
             /* API 26-29：-1 即"每次使用都要认证" */
@@ -271,6 +292,9 @@ public class BiometricWrapPlugin extends Plugin {
     /* ---------------- 系统生物弹窗 ---------------- */
 
     private BiometricPrompt.PromptInfo buildPromptInfo(String title, String subtitle) {
+        /* 只接受强生物。
+         * 即便这里放宽到 WEAK，密钥的认证规格仍是 STRONG，弱生物认证通过后
+         * 密钥依然不可用 —— 放宽只会让用户白按一次人脸，所以不做。 */
         return new BiometricPrompt.PromptInfo.Builder()
                 .setTitle(title)
                 .setSubtitle(subtitle)
@@ -356,6 +380,92 @@ public class BiometricWrapPlugin extends Plugin {
         ret.put("reasonText", reasonText(can));
         ret.put("hasEnroll", prefs().contains(P_CT) && prefs().contains(P_IV) && hasKey());
         call.resolve(ret);
+    }
+
+    /**
+     * 生物识别能力探测（只读，不改变任何认证策略）。
+     *
+     * App 目前只接受 BIOMETRIC_STRONG（见 buildPromptInfo），而 Android 上
+     * 绝大多数 2D 人脸被系统归为 BIOMETRIC_WEAK —— 这就是"手机明明有面容，
+     * App 却只认指纹"的原因。这里把"硬件有什么"和"系统认可哪一档"分开报出来。
+     */
+    @PluginMethod
+    public void capabilities(PluginCall call) {
+        Context ctx = getContext();
+        PackageManager pm = ctx.getPackageManager();
+        BiometricManager bm = BiometricManager.from(ctx);
+
+        int strong = bm.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG);
+        int weak = bm.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_WEAK);
+
+        JSObject ret = new JSObject();
+        ret.put("sdkInt", Build.VERSION.SDK_INT);
+        ret.put("fingerprintHw", pm.hasSystemFeature(PackageManager.FEATURE_FINGERPRINT));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ret.put("faceHw", pm.hasSystemFeature(PackageManager.FEATURE_FACE));
+            ret.put("irisHw", pm.hasSystemFeature(PackageManager.FEATURE_IRIS));
+        } else {
+            ret.put("faceHw", false);
+            ret.put("irisHw", false);
+        }
+        ret.put("strong", strong);
+        ret.put("strongText", capText(strong));
+        ret.put("weak", weak);
+        ret.put("weakText", capText(weak));
+        ret.put("policy", "STRONG");   /* App 当前策略：仅接受强生物识别 */
+        call.resolve(ret);
+    }
+
+    /**
+     * 补充生物验证：**不涉及任何密钥**，纯粹多一道人工确认。
+     *
+     * 为什么能用人脸：这里用的是 BIOMETRIC_WEAK，2D 人脸会出现在弹窗里。
+     * 但也正因为 WEAK 是 STRONG 的超集，系统会让用户自选模态 ——
+     * **App 无法强制"必须刷脸"**，用户按指纹也算通过。
+     *
+     * 安全定位：主保护仍是"STRONG 生物 + PIN"（密钥绑定），
+     * 这一道只是额外的在场证明，不作为密钥因子。
+     */
+    @PluginMethod
+    public void verifyExtra(final PluginCall call) {
+        final FragmentActivity act = (FragmentActivity) getActivity();
+        if (act == null) {
+            call.reject("NO_ACTIVITY", "界面不可用");
+            return;
+        }
+        act.runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                BiometricPrompt prompt = new BiometricPrompt(act,
+                        ContextCompat.getMainExecutor(act),
+                        new BiometricPrompt.AuthenticationCallback() {
+                            @Override
+                            public void onAuthenticationSucceeded(
+                                    BiometricPrompt.AuthenticationResult result) {
+                                call.resolve();
+                            }
+
+                            @Override
+                            public void onAuthenticationError(int code, CharSequence msg) {
+                                call.reject(mapAuthError(code), String.valueOf(msg));
+                            }
+
+                            @Override
+                            public void onAuthenticationFailed() {
+                                /* 单次识别失败不终止，让用户继续试 */
+                            }
+                        });
+
+                BiometricPrompt.PromptInfo info = new BiometricPrompt.PromptInfo.Builder()
+                        .setTitle("补充验证")
+                        .setSubtitle("请再用指纹或面容确认一次")
+                        .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_WEAK)
+                        .setNegativeButtonText("取消")
+                        .setConfirmationRequired(false)
+                        .build();
+                prompt.authenticate(info);
+            }
+        });
     }
 
     /**

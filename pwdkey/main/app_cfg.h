@@ -36,6 +36,19 @@
 #define CFG_PROTO_VER           0x01
 #define CFG_DATA_VER            1                /* NVS sys.ver */
 
+/* --- 分区布局（见 partitions.csv）---
+ * vault 固定在 flash 12 MB 处，固件区最大 11.9 MB，物理上不可能重叠。
+ * 所有用户数据（主密码验证值/盐/条目/主机名/系统配置）都必须走 VAULT_NVS_OPEN，
+ * 这样升级固件永远不动它们。
+ */
+#define CFG_PART_VAULT          "vault"          /* ★密码库 */
+#define CFG_PART_AUDIT          "audit"          /* 审计日志 */
+#define CFG_PART_SYS            "nvs"            /* 系统 NVS：BLE 绑定等，可丢 */
+
+/* 替代 nvs_open()：一律打开 vault 分区 */
+#define VAULT_NVS_OPEN(ns, mode, out) \
+    nvs_open_from_partition(CFG_PART_VAULT, (ns), (mode), (out))
+
 /* --- BOOT button --- */
 #define CFG_BTN_SHORT_MAX_MS    2000             /* short press < 2s = confirm */
 #define CFG_BTN_FACTORY_MS      5000             /* power-on hold >= 5s = factory reset */

@@ -32,7 +32,7 @@
 ```
 pwdkey/
 ├── CMakeLists.txt                # 工程根（project(pwdkey)）
-├── partitions.csv                # 分区表：nvs 48K / factory 2M / audit 128K
+├── partitions.csv                # 分区表 v2：nvs 16K / factory 11.9M / vault 1M@0xC00000 / audit 256K@0xD00000
 ├── sdkconfig.defaults            # 关键配置（含 HKDF/SM_LVL/NVS_PERSIST 等）
 └── main/
     ├── CMakeLists.txt
@@ -124,7 +124,53 @@ or
 ```bash
 idf.py partition-table
 ```
-预期与 `partitions.csv` 一致：nvs 0x9000(48K) / phy_init 0x15000 / factory 0x20000(2M) / audit 0x220000(128K)。
+预期与 `partitions.csv` 一致：nvs 0x9000(16K) / phy_init 0xD000(4K) / factory 0x10000(11.9M) / **vault 0xC00000(1M)** / audit 0xD00000(256K)。
+> `vault` 是独立的数据分区，固定在 12 MB 处；固件区最大 11.9 MB，两者物理隔离，
+> 因此**烧录任何固件都不可能覆盖密码库**。
+
+#### 分区布局（v2，2026-10-27 起）
+
+| 分区 | 偏移 | 大小 | 内容 | 烧固件会碰吗 |
+|---|---|---|---|---|
+| bootloader | `0x000000` | 32 K | 引导器 | ✅ 每次都写 |
+| 分区表 | `0x008000` | 4 K | 本表 | ✅ 每次都写 |
+| nvs | `0x009000` | 16 K | BLE 绑定/配对（丢了只需重配） | ⚠️ 仅改分区表时 |
+| phy_init | `0x00D000` | 4 K | 射频校准 | ✅ 每次都写 |
+| factory | `0x010000` | 11.9 M | 固件本体（当前 578 K） | ✅ 每次都写 |
+| **vault** | **`0xC00000`** | **1 M** | **密码库** | ❌ **永不触碰** |
+| audit | `0xD00000` | 256 K | 审计日志 | ❌ 永不触碰 |
+
+**为什么这样排**：容量小的数据区放到 flash 尾部，代码区只占前 11.9 MB。
+`idf.py flash` 只写 `0x0 / 0x8000 / 0x10000` 三个地址，物理上到不了 `0xC00000`。
+即使以后固件涨到 11 MB、或改成双 OTA 槽（`ota_0` + `ota_1`），`vault` 依然原地不动。
+
+**已实测**：连续两次完整烧录固件，读取 `0xC00000` 起 1 KB 与烧录前逐字节比对，完全一致。
+
+**v1 → v2 的变化**：
+
+| | v1（旧） | v2（当前） |
+|---|---|---|
+| nvs | 48 K @`0x9000` | 16 K @`0x9000` |
+| factory | 2 M @`0x20000` | 11.9 M @`0x10000` |
+| vault | —— | **1 M @`0xC00000`** |
+| audit | 128 K @`0x220000` | 256 K @`0xD00000` |
+
+所有用户数据（主密码验证值/盐/条目/主机名/系统配置）从 `nvs` 迁到 `vault`，
+代码里统一走 `app_cfg.h` 的 `VAULT_NVS_OPEN()` 宏。
+
+> ⚠️ **从 v1 分区表跨到 v2 时，旧 `nvs` 里的数据不会自动迁移**（位置和大小都变了）。
+> 设备里已有密码的，必须先用旧固件导出，再在新固件里重新录入。
+
+**数据版本保护**：`vault` 内有 `sys.ver` 记录数据格式版本。
+
+- 旧数据 + 新固件 → 记录日志并继续（迁移钩子已预留）
+- 新数据 + 旧固件（降级）→ **拒绝启动**，宁可打不开也不冒险写坏
+
+**绝对不要做**：
+
+- `idf.py erase_flash` / `esptool erase_flash` —— 全片擦除，密码库一起没
+- 用**不同布局**的 `partitions.csv` 烧任何测试固件 —— app 起点一变就可能盖住数据区
+  （2026-10-27 曾因此覆盖过旧 NVS 后半段）
 
 **确认关键配置已生效**（可选，防 C3 类问题）：
 
@@ -146,7 +192,7 @@ python -c "import re;c=open('sdkconfig',encoding='utf-8').read();[print(k,re.sea
 | 主程序编译 | ✅ 通过，**0 警告**（-Wall -Wextra） |
 | `build/pwdkey.bin` | **574,688 字节**（Total image ≈ 574.6 KB，占 2MB app 分区约 28%，余量充足） |
 | `build/bootloader/bootloader.bin` | 20,832 字节 |
-| `build/partition_table/partition-table.bin` | 3,072 字节；**解析验证**：nvs 48K / phy_init 4K / factory 2M / audit 128K —— 与 `partitions.csv` 完全一致 |
+| `build/partition_table/partition-table.bin` | 3,072 字节；**解析验证**：nvs 16K / phy_init 4K / factory 11.9M / vault 1M@0xC00000 / audit 256K@0xD00000 —— 与 `partitions.csv` 完全一致 |
 | sdkconfig 关键项 | ✅ 全部生效：`MBEDTLS_HKDF_C=y`、`SM_LVL=2`、`NVS_PERSIST=y`、`MAX_CCCDS=16`、`SVC_HID_MAX_RPTS=2`、`SPIRAM_MODE_OCT=y`、**`NVS_ENCRYPTION` 未设置（零 eFuse 红线守住）** |
 | 过程中修复的编译问题 | 仅 1 处（`ble_mgmt_svc.h` 缺 `<stdbool.h>`，已修复） |
 
