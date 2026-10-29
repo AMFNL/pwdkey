@@ -4,7 +4,7 @@
 >
 > 电脑侧不经过剪贴板、不装任何软件、不留明文副本。
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Firmware](https://img.shields.io/badge/firmware-ESP32--S3-informational)](pwdkey/)
 [![Protocol](https://img.shields.io/badge/protocol-v1.2-informational)](PwdKey_固件操作部署手册_v1.0.md)
 
@@ -248,7 +248,7 @@ sdk.dir=C\:\\Android\\Sdk
 
 ## 许可证
 
-[MIT](LICENSE) —— 可自由使用、修改、商用，保留版权声明即可。
+[Apache-2.0](LICENSE) —— 可自由使用、修改、分发、商用，保留版权声明与 NOTICE 即可。附带的专利授权可以防止贡献者反过来用专利起诉你。
 
 > ⚠️ 本项目按「现状」提供，不含任何担保。它保护的是你的密码不被**远程、软件层面**窃取；
 > 请自行评估是否匹配你的威胁模型。因使用不当造成的损失，作者不承担责任。
@@ -277,4 +277,4 @@ physical flash extraction), kernel-level keyloggers (HID input is still key even
 cameras/shoulder surfing, or reflashing with untrusted firmware. Read the
 [security model](#安全模型) before relying on it.
 
-MIT licensed.
+Apache-2.0 licensed.
